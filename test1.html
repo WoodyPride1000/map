@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <title>OpenLayers 統合計測・ポップアップ個別ドラッグ対応</title>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v7.3.0/ol.css" integrity="sha384-..." crossorigin="anonymous">
+    <style>
+        #map {
+            width: 100%;
+            height: 900px;
+        }
+        /* 計測結果ポップアップのスタイル */
+        .ol-popup {
+            position: absolute;
+            background-color: white;
+            padding: 0;
+            border-radius: 5px;
+            border: 1px solid #cccccc;
+            bottom: 12px;
+            left: -50px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+            min-width: 200px;
+            z-index: 100;
+        }
+        #popup-header {
+            cursor: move;
+            background-color: #f0f0f0;
+            padding: 5px 15px;
+            border-bottom: 1px solid #ccc;
+            font-weight: bold;
+        }
+        #popup-content {
+            padding: 15px;
+        }
+        .ol-popup-closer {
+            text-decoration: none;
+            position: absolute;
+            top: 5px;
+            right: 8px;
+            z-index: 10;
+        }
+        .ol-popup-closer:after {
+            content: "✖";
+        }
+
+        /* 断面図ポップアップのスタイル */
+        #profile-popup {
+            background-color: white;
+            padding: 10px;
+            border-radius: 5px;
+            border: 1px solid #1f77b4;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+            min-width: 300px;
+            min-height: 150px;
+            max-height: 80vh;
+            position: absolute;
+            z-index: 99;
+            box-sizing: border-box;
+            resize: both;
+            overflow: auto;
+            display: flex;
+            flex-direction: column;
+        }
+        #profile-popup-header {
+            font-weight: bold;
+            margin-bottom: 5px;
+            cursor: move;
+            background-color: #e6f2ff;
+            padding: 5px;
+            border-radius: 3px;
+            flex-shrink: 0;
+        }
+        #profile-closer {
+            position: absolute;
+            top: 5px;
+            right: 8px;
+            text-decoration: none;
+            font-weight: bold;
+            color: #333;
+        }
+        #profile-content {
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1;
+            min-height: 0;
+        }
+        #elevationChart {
+            width: 100% !important;
+            flex-grow: 1;
+            min-height: 100px;
+        }
+        #profile-status {
+            flex-shrink: 0;
+            padding-top: 5px;
+            font-size: 0.9em;
+        }
+        #profile-status.progress::before {
+            content: '';
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #333;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 1s linear infinite;
+            margin-right: 5px;
+            vertical-align: middle;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* レイヤー切り替えボタンコンテナのスタイル */
+        #layer-switcher {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+            z-index: 1000;
+        }
+        #layer-switcher label input:checked + span {
+            background-color: #e6f2ff;
+            font-weight: bold;
+            display: inline-block;
+            padding: 2px 5px;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+
+    <div id="profile-popup" role="dialog" aria-label="標高断面図ポップアップ">
+        <div id="profile-popup-header" tabindex="0" aria-label="標高断面図ヘッダー">標高断面図</div>
+        <a href="#" id="profile-closer" aria-label="断面図ポップアップを閉じる" tabindex="0">✖</a>
+        <div id="profile-content">
+            <canvas id="elevationChart" aria-label="標高断面図"></canvas>
+            <div id="profile-status" aria-live="polite">2点目を待っています...</div>
+        </div>
+    </div>
+
+    <div id="popup" class="ol-popup" role="dialog" aria-label="計測結果ポップアップ">
+        <div id="popup-header" tabindex="0" aria-label="計測結果ヘッダー">計測結果</div>
+        <a href="#" id="popup-closer" class="ol-popup-closer" aria-label="計測結果ポップアップを閉じる" tabindex="0"></a>
+        <div id="popup-content" aria-live="polite"></div>
+    </div>
+
+    <div id="layer-switcher">
+        <div>ベースマップ切り替え</div>
+        <label><input type="radio" name="base_type" value="std" checked><span> 標準（地図）</span></label><br>
+        <label><input type="radio" name="base_type" value="photo"><span> 写真（地理院）</span></label><hr>
+        <div>タイルソース切り替え</div>
+        <label><input type="radio" name="tile_source" value="osm" checked><span> OpenStreetMap</span></label><br>
+        <label><input type="radio" name="tile_source" value="gsi"><span> 国土地理院（標準）</span></label>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/ol@v7.3.0/dist/ol.js" integrity="sha384-..." crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" integrity="sha384-..." crossorigin="anonymous"></script>
+
+    <script>
+        // 定数定義
+        const ELEVATION_API_URL = 'https://cyberjapandata2.gsi.go.jp/general/dem/scripts/getelevation.php';
+        const DEFAULT_PROFILE_STEPS = 30;
+        const MAX_PROFILE_STEPS = 100;
+        const API_TIMEOUT_MS = 5000;
+
+        // キャッシュ
+        const elevationCache = new Map();
+
+        // レイヤー定義
+        const osmLayer = new ol.layer.Tile({
+            title: 'OpenStreetMap',
+            type: 'base',
+            visible: true,
+            source: new ol.source.OSM()
+        });
+        const gsiStdLayer = new ol.layer.Tile({
+            title: 'GSI_Standard',
+            type: 'base',
+            visible: false,
+            source: new ol.source.XYZ({
+                url: 'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png',
+                attributions: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">地理院タイル</a>'
+            })
+        });
+        const gsiPhotoLayer = new ol.layer.Tile({
+            title: 'GSI_Photo',
+            type: 'base',
+            visible: false,
+            source: new ol.source.XYZ({
+                url: 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg',
+                attributions: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">地理院タイル</a>'
+            })
+        });
+        const baseLayerGroup = new ol.layer.Group({ layers: [osmLayer, gsiStdLayer, gsiPhotoLayer] });
+
+        // 2点間計測用変数とマーカーレイヤー
+        let points = [];
+        const vectorSource = new ol.source.Vector();
+        const lineStyle = new ol.style.Style({
+            stroke: new ol.style.Stroke({ color: 'rgba(0, 0, 255, 0.7)', width: 4, lineDash: [10, 5] })
+        });
+        const maxElevStyle = new ol.style.Style({
+            image: new ol.style.Circle({
+                radius: 10,
+                fill: new ol.style.Fill({ color: 'orange' }),
+                stroke: new ol.style.Stroke({ color: 'black', width: 3 })
+            })
+        });
+        const pointStyle = new ol.style.Style({
+            image: new ol.style.Circle({
+                radius: 7,
+                fill: new ol.style.Fill({ color: 'red' }),
+                stroke: new ol.style.Stroke({ color: 'white', width: 2 })
+            })
+        });
+
+        const vectorLayer = new ol.layer.Vector({
+            source: vectorSource,
+            style: function(feature) {
+                if (feature.get('type') === 'max_elevation') return maxElevStyle;
+                if (feature.getGeometry().getType() === 'LineString') return lineStyle;
+                return pointStyle;
+            }
+        });
+
+        // ポップアップの設定
+        const container = document.getElementById('popup');
+        const content = document.getElementById('popup-content');
+        const closer = document.getElementById('popup-closer');
+        const popupHeader = document.getElementById('popup-header');
+        const overlay = new ol.Overlay({ element: container, autoPan: true, autoPanAnimation: { duration: 250 } });
+
+        // 断面図ポップアップの設定
+        const profileContainer = document.getElementById('profile-popup');
+        const profileCloser = document.getElementById('profile-closer');
+        const profileStatus = document.getElementById('profile-status');
+        const profileHeader = document.getElementById('profile-popup-header');
+        const profileOverlay = new ol.Overlay({ element: profileContainer, autoPan: false, positioning: 'bottom-center' });
+        profileOverlay.setPosition(undefined);
+
+        // 地図の初期化
+        const map = new ol.Map({
+            target: 'map',
+            layers: [baseLayerGroup, vectorLayer],
+            overlays: [overlay, profileOverlay],
+            view: new ol.View({
+                center: ol.proj.fromLonLat([139.75, 35.68]),
+                zoom: 12,
+                maxZoom: 18
+            })
+        });
+
+        // Chart.jsのインスタンス
+        let elevationChart = null;
+
+        // ポップアップのドラッグ機能
+        let isDragging = false;
+        let startPixel;
+        let startCoord;
+        let currentDraggingOverlay = null;
+
+        function startDrag(event, targetOverlay) {
+            const style = window.getComputedStyle(profileContainer);
+            if (style.cursor.includes('resize')) return;
+
+            if (targetOverlay.getPosition()) {
+                isDragging = true;
+                startPixel = event.type.includes('touch') ? map.getEventPixel([event.touches[0].clientX, event.touches[0].clientY]) : map.getEventPixel(event);
+                startCoord = targetOverlay.getPosition();
+                currentDraggingOverlay = targetOverlay;
+                map.getInteractions().forEach(interaction => interaction.setActive(false));
+                popupHeader.style.pointerEvents = targetOverlay === overlay ? 'auto' : 'none';
+                profileHeader.style.pointerEvents = targetOverlay === profileOverlay ? 'auto' : 'none';
+            }
+        }
+
+        function handleDragMove(event) {
+            if (!isDragging || !currentDraggingOverlay) return;
+            const currentPixel = event.type.includes('touch') ? map.getEventPixel([event.touches[0].clientX, event.touches[0].clientY]) : map.getEventPixel(event);
+            const deltaPixelX = currentPixel[0] - startPixel[0];
+            const deltaPixelY = currentPixel[1] - startPixel[1];
+            const newCoordPixel = map.getPixelFromCoordinate(startCoord);
+            const newCoord = map.getCoordinateFromPixel([newCoordPixel[0] + deltaPixelX, newCoordPixel[1] + deltaPixelY]);
+            currentDraggingOverlay.setPosition(newCoord);
+        }
+
+        function stopDrag() {
+            if (isDragging) {
+                isDragging = false;
+                currentDraggingOverlay = null;
+                map.getInteractions().forEach(interaction => interaction.setActive(true));
+                popupHeader.style.pointerEvents = 'auto';
+                profileHeader.style.pointerEvents = 'auto';
+            }
+        }
+
+        // マウスイベント
+        popupHeader.addEventListener('mousedown', event => startDrag(event, overlay));
+        profileHeader.addEventListener('mousedown', event => startDrag(event, profileOverlay));
+        document.addEventListener('mousemove', handleDragMove);
+        document.addEventListener('mouseup', stopDrag);
+
+        // タッチイベント
+        popupHeader.addEventListener('touchstart', event => startDrag(event, overlay));
+        profileHeader.addEventListener('touchstart', event => startDrag(event, profileOverlay));
+        document.addEventListener('touchmove', handleDragMove);
+        document.addEventListener('touchend', stopDrag);
+
+        // キーボード操作
+        popupHeader.addEventListener('keydown', event => {
+            if (event.key === 'Enter') {
+                overlay.setPosition(undefined);
+                closer.blur();
+                resetMeasurement();
+            }
+        });
+        profileHeader.addEventListener('keydown', event => {
+            if (event.key === 'Enter') {
+                profileOverlay.setPosition(undefined);
+            }
+        });
+
+        // ポップアップ閉じる処理
+        closer.onclick = function() {
+            resetMeasurement();
+            return false;
+        };
+        profileCloser.onclick = function() {
+            profileOverlay.setPosition(undefined);
+            return false;
+        };
+
+        function resetMeasurement() {
+            overlay.setPosition(undefined);
+            vectorSource.clear();
+            points = [];
+            if (elevationChart) elevationChart.destroy();
+            elevationChart = null;
+            profileOverlay.setPosition(undefined);
+            profileStatus.textContent = '2点目を待っています...';
+        }
+
+        // デバウンス関数
+        function debounce(func, delay) {
+            let timeoutId;
+            return function(...args) {
+                clearTimeout(timeoutId);
+                timeoutId = setTimeout(() => func.apply(this, args), delay);
+            };
+        }
+
+        // リサイズ時のChart.js再描画
+        const debouncedChartResize = debounce(() => {
+            if (elevationChart) elevationChart.resize();
+        }, 50);
+        const resizeObserver = new ResizeObserver(entries => {
+            for (let entry of entries) {
+                if (entry.target.id === 'profile-popup') debouncedChartResize();
+            }
+        });
+        resizeObserver.observe(profileContainer);
+
+        // ポップアップ位置調整
+        function adjustOverlayPosition(overlay, coord) {
+            const pixel = map.getPixelFromCoordinate(coord);
+            const mapSize = map.getSize();
+            const overlayElement = overlay.getElement();
+            const overlayWidth = overlayElement.offsetWidth;
+            const overlayHeight = overlayElement.offsetHeight;
+
+            pixel[0] = Math.max(overlayWidth / 2, Math.min(pixel[0], mapSize[0] - overlayWidth / 2));
+            pixel[1] = Math.max(overlayHeight, Math.min(pixel[1], mapSize[1] - overlayHeight / 2));
+
+            const adjustedCoord = map.getCoordinateFromPixel(pixel);
+            overlay.setPosition(adjustedCoord);
+        }
+
+        // タイル切り替え
+        function hideAllBaseLayers() {
+            baseLayerGroup.getLayers().forEach(layer => layer.setVisible(false));
+        }
+        document.addEventListener('change', function(event) {
+            if (event.target.name === 'base_type' || event.target.name === 'tile_source') {
+                const baseType = document.querySelector('input[name="base_type"]:checked').value;
+                const tileSource = document.querySelector('input[name="tile_source"]:checked').value;
+                hideAllBaseLayers();
+                if (baseType === 'std') {
+                    if (tileSource === 'osm') osmLayer.setVisible(true);
+                    else if (tileSource === 'gsi') gsiStdLayer.setVisible(true);
+                } else if (baseType === 'photo') gsiPhotoLayer.setVisible(true);
+            }
+        });
+
+        // 標高断面図描画
+        function drawElevationChart(profile, distanceMeters) {
+            const ctx = document.getElementById('elevationChart').getContext('2d');
+            const labels = profile.map((_, index) => {
+                const fraction = index / (profile.length - 1);
+                const dist = distanceMeters * fraction;
+                return (dist / 1000).toFixed(2);
+            });
+            const elevations = profile.map(p => p.elevation);
+
+            if (elevationChart) {
+                elevationChart.data.labels = labels;
+                elevationChart.data.datasets[0].data = elevations;
+                elevationChart.options.scales.x.title.text = `距離 (km) - 全長: ${(distanceMeters / 1000).toFixed(3)} km`;
+                elevationChart.update();
+            } else {
+                elevationChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: '標高 (m)',
+                            data: elevations,
+                            borderColor: 'rgba(75, 192, 192, 1)',
+                            backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            tension: 0.4
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: { title: { display: true, text: `距離 (km) - 全長: ${(distanceMeters / 1000).toFixed(3)} km` } },
+                            y: { title: { display: true, text: '標高 (m)' }, beginAtZero: false }
+                        },
+                        plugins: { legend: { display: false }, title: { display: false } }
+                    }
+                });
+            }
+            profileStatus.textContent = `計測完了。全長: ${(distanceMeters / 1000).toFixed(3)} km`;
+        }
+
+        // 標高取得
+        async function getElevation(coordinate) {
+            const key = `${coordinate[0]},${coordinate[1]}`;
+            if (elevationCache.has(key)) {
+                return elevationCache.get(key);
+            }
+            const [lon, lat] = coordinate;
+            const url = `${ELEVATION_API_URL}?lat=${lat}&lon=${lon}&outtype=json`;
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+                const response = await fetch(url, { signal: controller.signal });
+                clearTimeout(timeoutId);
+                const data = await response.json();
+                if (data.elevation === '取得できませんでした') {
+                    profileStatus.textContent = '標高データの取得に失敗しました。';
+                    return null;
+                }
+                const elevation = parseFloat(data.elevation);
+                elevationCache.set(key, elevation);
+                return elevation;
+            } catch (error) {
+                console.error(`標高データの取得中にエラーが発生しました: 座標 [${lon}, ${lat}]`, error);
+                profileStatus.textContent = '標高データの取得中にエラーが発生しました。';
+                return null;
+            }
+        }
+
+        // 線形補間
+        function interpolateCoordinates(coordA, coordB, fraction) {
+            const lon = coordA[0] + (coordB[0] - coordA[0]) * fraction;
+            const lat = coordA[1] + (coordB[1] - coordA[1]) * fraction;
+            return [lon, lat];
+        }
+
+        // 標高プロファイル取得
+        async function getElevationProfile(coord1, coord2, maxSteps = DEFAULT_PROFILE_STEPS) {
+            const distanceMeters = ol.sphere.getDistance(coord1, coord2);
+            const steps = Math.min(maxSteps, Math.ceil(distanceMeters / 1000));
+            const profile = [];
+            for (let i = 0; i <= steps; i++) {
+                const fraction = i / steps;
+                const intermediateCoord = interpolateCoordinates(coord1, coord2, fraction);
+                const elevation = await getElevation(intermediateCoord);
+                profile.push({
+                    coord: intermediateCoord,
+                    webMercatorCoord: ol.proj.fromLonLat(intermediateCoord),
+                    elevation: elevation
+                });
+            }
+            return profile;
+        }
+
+        // クリックイベント
+        async function handleMapClick(evt) {
+            const webMercatorCoord = evt.coordinate;
+            const lonLatCoord = ol.proj.toLonLat(webMercatorCoord);
+
+            overlay.setPosition(undefined);
+            resetMeasurementIfComplete();
+
+            addPointFeature(webMercatorCoord);
+            points.push(lonLatCoord);
+
+            if (points.length === 2) {
+                await processMeasurement();
+            } else {
+                profileStatus.textContent = '2点目をクリックして計測を完了してください。';
+            }
+        }
+
+        function resetMeasurementIfComplete() {
+            if (points.length >= 2) resetMeasurement();
+        }
+
+        function addPointFeature(webMercatorCoord) {
+            const pointFeature = new ol.Feature({ geometry: new ol.geom.Point(webMercatorCoord) });
+            vectorSource.addFeature(pointFeature);
+        }
+
+        async function processMeasurement() {
+            profileStatus.classList.add('progress');
+            profileStatus.textContent = '標高データを取得中...';
+            const [coord1, coord2] = points;
+
+            const lineFeature = new ol.Feature({
+                geometry: new ol.geom.LineString([ol.proj.fromLonLat(coord1), ol.proj.fromLonLat(coord2)])
+            });
+            vectorSource.addFeature(lineFeature);
+
+            const profile = await getElevationProfile(coord1, coord2, DEFAULT_PROFILE_STEPS);
+            const maxElevationPoint = findMaxElevationPoint(profile);
+            if (maxElevationPoint) {
+                const maxElevFeature = new ol.Feature({
+                    geometry: new ol.geom.Point(maxElevationPoint.webMercatorCoord),
+                    type: 'max_elevation'
+                });
+                vectorSource.addFeature(maxElevFeature);
+            }
+
+            const distanceMeters = ol.sphere.getDistance(coord1, coord2);
+            displayMeasurementResults(profile, distanceMeters, maxElevationPoint);
+            drawElevationChart(profile, distanceMeters);
+
+            const centerCoord = calculateCenterCoord();
+            adjustOverlayPosition(overlay, centerCoord);
+            adjustOverlayPosition(profileOverlay, centerCoord);
+
+            profileStatus.classList.remove('progress');
+        }
+
+        function findMaxElevationPoint(profile) {
+            let maxElevation = -Infinity;
+            let maxElevationPoint = null;
+            profile.forEach(p => {
+                if (p.elevation !== null && p.elevation > maxElevation) {
+                    maxElevation = p.elevation;
+                    maxElevationPoint = p;
+                }
+            });
+            return maxElevationPoint;
+        }
+
+        function displayMeasurementResults(profile, distanceMeters, maxElevationPoint) {
+            const htmlContent = `
+                <p><strong>始点:</strong> 標高: ${profile[0].elevation !== null ? profile[0].elevation.toFixed(1) + ' m' : 'N/A'}</p>
+                <p><strong>終点:</strong> 標高: ${profile[profile.length - 1].elevation !== null ? profile[profile.length - 1].elevation.toFixed(1) + ' m' : 'N/A'}</p>
+                <p><strong>最高標高:</strong> <strong style="color: orange;">${maxElevationPoint ? maxElevationPoint.elevation.toFixed(1) + ' m' : 'N/A'}</strong></p>
+                <hr>
+                <p><strong>2点間距離:</strong> <strong style="color: blue;">${(distanceMeters / 1000).toFixed(3)} km (${distanceMeters.toFixed(0)} m)</strong></p>
+            `;
+            content.innerHTML = htmlContent;
+        }
+
+        function calculateCenterCoord() {
+            const features = vectorSource.getFeatures();
+            return [
+                (features[0].getGeometry().getCoordinates()[0] + features[1].getGeometry().getCoordinates()[0]) / 2,
+                (features[0].getGeometry().getCoordinates()[1] + features[1].getGeometry().getCoordinates()[1]) / 2
+            ];
+        }
+
+        map.on('click', handleMapClick);
+    </script>
+</body>
+</html>

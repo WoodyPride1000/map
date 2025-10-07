@@ -42,7 +42,6 @@
         .ol-popup-closer:after {
             content: "✖";
         }
-
         /* 断面図ポップアップのスタイル */
         #profile-popup {
             background-color: white;
@@ -109,7 +108,6 @@
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
-
         /* レイヤー切り替えボタンコンテナのスタイル */
         #layer-switcher {
             position: absolute;
@@ -127,6 +125,13 @@
             display: inline-block;
             padding: 2px 5px;
             border-radius: 3px;
+        }
+        /* 🌟 ドラッグ中に最前面にするためのクラス */
+        .ol-popup.top-zindex {
+            z-index: 101 !important;
+        }
+        #profile-popup.top-zindex {
+            z-index: 101 !important;
         }
     </style>
 </head>
@@ -264,50 +269,61 @@
         let currentDraggingOverlay = null;
 
         function startDrag(event, targetOverlay) {
+            const isTouchEvent = event.type.includes('touch');
+            if (isTouchEvent || event.button === 0) {
+                event.preventDefault();
+            }
             const style = window.getComputedStyle(profileContainer);
             if (style.cursor.includes('resize')) return;
 
             if (targetOverlay.getPosition()) {
                 isDragging = true;
-                startPixel = event.type.includes('touch') ? map.getEventPixel([event.touches[0].clientX, event.touches[0].clientY]) : map.getEventPixel(event);
+                const eventPoint = isTouchEvent ? [event.touches[0].clientX, event.touches[0].clientY] : [event.clientX, event.clientY];
+                startPixel = map.getEventPixel(eventPoint);
                 startCoord = targetOverlay.getPosition();
                 currentDraggingOverlay = targetOverlay;
+                targetOverlay.getElement().classList.add('top-zindex');
+                if (targetOverlay === overlay) profileContainer.classList.remove('top-zindex');
+                if (targetOverlay === profileOverlay) container.classList.remove('top-zindex');
                 map.getInteractions().forEach(interaction => interaction.setActive(false));
-                popupHeader.style.pointerEvents = targetOverlay === overlay ? 'auto' : 'none';
-                profileHeader.style.pointerEvents = targetOverlay === profileOverlay ? 'auto' : 'none';
             }
         }
 
         function handleDragMove(event) {
             if (!isDragging || !currentDraggingOverlay) return;
-            const currentPixel = event.type.includes('touch') ? map.getEventPixel([event.touches[0].clientX, event.touches[0].clientY]) : map.getEventPixel(event);
+            const isTouchEvent = event.type.includes('touch');
+            if (isTouchEvent) event.preventDefault();
+            const currentPixel = isTouchEvent ? map.getEventPixel([event.touches[0].clientX, event.touches[0].clientY]) : map.getEventPixel(event);
             const deltaPixelX = currentPixel[0] - startPixel[0];
             const deltaPixelY = currentPixel[1] - startPixel[1];
             const newCoordPixel = map.getPixelFromCoordinate(startCoord);
             const newCoord = map.getCoordinateFromPixel([newCoordPixel[0] + deltaPixelX, newCoordPixel[1] + deltaPixelY]);
-            currentDraggingOverlay.setPosition(newCoord);
+            try {
+                currentDraggingOverlay.setPosition(newCoord);
+            } catch (error) {
+                console.error('ポップアップの移動中にエラーが発生しました:', error);
+            }
         }
 
         function stopDrag() {
             if (isDragging) {
+                if (currentDraggingOverlay) {
+                    currentDraggingOverlay.getElement().classList.remove('top-zindex');
+                }
                 isDragging = false;
                 currentDraggingOverlay = null;
                 map.getInteractions().forEach(interaction => interaction.setActive(true));
-                popupHeader.style.pointerEvents = 'auto';
-                profileHeader.style.pointerEvents = 'auto';
             }
         }
 
-        // マウスイベント
+        // イベントリスナー
         popupHeader.addEventListener('mousedown', event => startDrag(event, overlay));
         profileHeader.addEventListener('mousedown', event => startDrag(event, profileOverlay));
-        document.addEventListener('mousemove', handleDragMove);
+        document.addEventListener('mousemove', handleDragMove, { passive: false });
         document.addEventListener('mouseup', stopDrag);
-
-        // タッチイベント
-        popupHeader.addEventListener('touchstart', event => startDrag(event, overlay));
-        profileHeader.addEventListener('touchstart', event => startDrag(event, profileOverlay));
-        document.addEventListener('touchmove', handleDragMove);
+        popupHeader.addEventListener('touchstart', event => startDrag(event, overlay), { passive: false });
+        profileHeader.addEventListener('touchstart', event => startDrag(event, profileOverlay), { passive: false });
+        document.addEventListener('touchmove', handleDragMove, { passive: false });
         document.addEventListener('touchend', stopDrag);
 
         // キーボード操作

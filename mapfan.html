@@ -1,0 +1,1109 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <title>OpenLayers 統合計測・伝搬計算（レベルダイヤ/右側配置）</title>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
+    <style>
+        /* 必須：地図コンテナのサイズを定義 */
+        #map {
+            width: 100%;
+            height: 100vh; /* 地図を画面全体に表示 */
+        }
+
+        /* --- ポップアップ/コントロール共通スタイル --- */
+        .control-panel, .ol-popup-draggable {
+            position: absolute;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+            z-index: 1000;
+            right: 10px; /* 右寄せ */
+            left: auto;
+        }
+        .ol-popup-draggable {
+            resize: both;
+            overflow: auto;
+            min-width: 250px;
+            min-height: 100px;
+            box-sizing: border-box;
+        }
+
+        /* レイヤー切り替え - 地図の右上に配置 */
+        #layer-switcher {
+            top: 10px;
+            z-index: 1001;
+        }
+
+        /* 伝搬計算コントロール - レイヤー切り替えの下に配置 (重なり解消済み) */
+        #propagation-controls {
+            top: 160px; /* layer-switcher (約130px) の直下に配置 */
+            max-width: 250px;
+            z-index: 1001;
+        }
+        #propagation-controls input[type="number"], #propagation-controls button {
+            width: 80px;
+            margin-left: 5px;
+            margin-bottom: 5px;
+        }
+        #propagation-controls button {
+            width: 100%;
+            margin-left: 0;
+        }
+        #propagation-controls label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+        #propagation-controls hr {
+            margin: 8px 0;
+        }
+
+        /* 計測結果ポップアップ */
+        .ol-popup {
+            top: 550px; /* コントロールの下に配置 */
+            padding: 0;
+            z-index: 100;
+        }
+        #popup {
+            position: absolute;
+        }
+        #popup-header {
+            cursor: move;
+            background-color: #f0f0f0;
+            padding: 5px 15px;
+            border-bottom: 1px solid #ccc;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+        #popup-content {
+            padding: 15px;
+            font-size: 0.95em;
+        }
+        .ol-popup-closer {
+            text-decoration: none;
+            position: absolute;
+            top: 5px;
+            right: 8px;
+            z-index: 10;
+        }
+        .ol-popup-closer:after {
+            content: "✖";
+        }
+
+        /* 断面図ポップアップ (右側で任意の位置に配置) */
+        #profile-popup {
+            position: absolute;
+            top: 10px;
+            right: 300px; /* コントロールと重ならないように調整 */
+            left: auto;
+            min-height: 250px;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            padding: 10px;
+            z-index: 99;
+        }
+        #profile-popup-header {
+            font-weight: bold;
+            margin-bottom: 5px;
+            cursor: move;
+            background-color: #e6f2ff;
+            padding: 5px;
+            border-radius: 3px;
+            flex-shrink: 0;
+        }
+        #profile-closer {
+            position: absolute;
+            top: 5px;
+            right: 8px;
+            text-decoration: none;
+            font-weight: bold;
+            color: #333;
+        }
+        #profile-content {
+            padding-top: 5px;
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1;
+            min-height: 0;
+        }
+        #elevationChart {
+            width: 100% !important;
+            flex-grow: 1;
+            min-height: 100px;
+            margin-bottom: 10px;
+        }
+        #powerChart {
+            width: 100% !important;
+            flex-grow: 0;
+            min-height: 100px;
+            max-height: 150px;
+        }
+        #profile-status {
+            flex-shrink: 0;
+            padding-top: 5px;
+            font-size: 0.9em;
+        }
+
+        /* その他スタイル */
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .ol-popup.top-zindex, #profile-popup.top-zindex {
+            z-index: 1000 !important;
+        }
+        .los-yes { color: green; font-weight: bold; }
+        .los-no { color: red; font-weight: bold; }
+        .coord-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85em;
+        }
+        .coord-table th, .coord-table td {
+            border: 1px solid #ddd;
+            padding: 4px;
+            text-align: left;
+        }
+        .coord-table th {
+            background-color: #f2f2f2;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+
+    <div id="profile-popup" class="ol-popup-draggable" role="dialog" aria-label="標高断面図ポップアップ">
+        <div id="profile-popup-header" tabindex="0" aria-label="標高断面図ヘッダー">標高断面図 / レベルダイヤグラム</div>
+        <a href="#" id="profile-closer" aria-label="断面図ポップアップを閉じる" tabindex="0">✖</a>
+        <div id="profile-content">
+            <canvas id="elevationChart" aria-label="標高断面図"></canvas>
+            <canvas id="powerChart" aria-label="レベルダイヤグラム（電力レベル）"></canvas>
+            <div id="profile-status" aria-live="polite">2点目を待っています...</div>
+        </div>
+    </div>
+
+    <div id="popup" class="ol-popup ol-popup-draggable" role="dialog" aria-label="計測結果ポップアップ">
+        <div id="popup-header" tabindex="0" aria-label="計測結果ヘッダー">計測結果と伝搬計算</div>
+        <a href="#" id="popup-closer" class="ol-popup-closer" aria-label="計測結果ポップアップを閉じる" tabindex="0"></a>
+        <div id="popup-content" aria-live="polite"></div>
+    </div>
+
+    <div id="layer-switcher" class="control-panel">
+        <div>ベースマップ切り替え</div>
+        <label><input type="radio" name="base_type" value="std" checked><span> 標準（地図）</span></label><br>
+        <label><input type="radio" name="base_type" value="photo"><span> 写真（地理院）</span></label><hr>
+        <div>タイルソース切り替え</div>
+        <label><input type="radio" name="tile_source" value="osm" checked><span> OpenStreetMap</span></label><br>
+        <label><input type="radio" name="tile_source" value="gsi"><span> 国土地理院（標準）</span></label>
+    </div>
+
+    <div id="propagation-controls" class="control-panel">
+        <h4>共通パラメータ</h4>
+        <label>
+            周波数 (MHz):
+            <input type="number" id="freq-input" value="300" min="1" step="0.1">
+        </label>
+        <hr>
+        <h4>送信側 (Tx) パラメータ</h4>
+        <label>
+            Tx 空中線高 (m):
+            <input type="number" id="tx-height-input" value="10" min="0" step="0.1">
+        </label>
+        <label>
+            送信出力 (W):
+            <input type="number" id="tx-power-input" value="10" min="0.001" step="0.1">
+        </label>
+        <label>
+            空中線利得 (dBi):
+            <input type="number" id="tx-gain-input" value="10" step="0.1">
+        </label>
+        <label>
+            ケーブルロス (dB):
+            <input type="number" id="tx-loss-input" value="4" min="0" step="0.1">
+        </label>
+        <hr>
+        <h4>受信側 (Rx) パラメータ</h4>
+        <label>
+            Rx 空中線高 (m):
+            <input type="number" id="rx-height-input" value="10" min="0" step="0.1">
+        </label>
+        <label>
+            空中線利得 (dBi):
+            <input type="number" id="rx-gain-input" value="10" step="0.1">
+        </label>
+        <label>
+            ケーブルロス (dB):
+            <input type="number" id="rx-loss-input" value="4" min="0" step="0.1">
+        </label>
+        <hr>
+        <button id="simple-recalculate-btn">簡易モデルで計算</button>
+        <button id="itu-calculate-btn" style="margin-top: 5px;">ITU-R 計算実行 (P.1546/P.1812)</button>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.2/proj4.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mgrs@1.0.0/dist/mgrs.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+    <script>
+        // 定数定義
+        const ELEVATION_API_URL = 'https://cyberjapandata2.gsi.go.jp/general/dem/scripts/getelevation.php';
+        const DEFAULT_PROFILE_STEPS = 50;
+        const API_TIMEOUT_MS = 5000;
+        const PROJ_WGS84 = "EPSG:4326";
+        const K_FACTOR = 4 / 3;
+        const EARTH_RADIUS_M = 6371000;
+
+        // 初期値定数 (リセット用)
+        const INITIAL_PARAMS = {
+            freq: 300,
+            txHeight: 10, rxHeight: 10,
+            txPower: 10,
+            txGain: 10, rxGain: 10,
+            txLoss: 4, rxLoss: 4
+        };
+
+        // 単位変換ヘルパー
+        const W_TO_DBM = (W) => 10 * Math.log10(W * 1000);
+        const elevationCache = new Map();
+
+        // UTM/MGRS変換関数
+        function getUtmProjDef(lon) {
+            const zoneNum = Math.floor((lon + 180) / 6) % 60 + 1;
+            const north = (lon >= 0) ? 'north' : 'south';
+            const projString = `+proj=utm +zone=${zoneNum} +${north} +ellps=WGS84 +datum=WGS84 +units=m +no_defs`;
+            if (!proj4.defs(`EPSG:${zoneNum}${north.charAt(0).toUpperCase()}`, projString)) {
+                proj4.defs(`EPSG:${zoneNum}${north.charAt(0).toUpperCase()}`, projString);
+            }
+            return `EPSG:${zoneNum}${north.charAt(0).toUpperCase()}`;
+        }
+        function convertToUTM(lonLat) {
+             try {
+                const projCode = getUtmProjDef(lonLat[0]);
+                const utmCoord = proj4(PROJ_WGS84, projCode, lonLat);
+                return `${utmCoord[0].toFixed(2)}m E, ${utmCoord[1].toFixed(2)}m N (${projCode.split(':')[1]})`;
+            } catch (e) {
+                return "N/A (UTM error)";
+            }
+        }
+        function convertToMGRS(lonLat, precision = 3) {
+             try {
+                return mgrs.forward(lonLat, precision);
+            } catch (e) {
+                return "N/A (MGRS error)";
+            }
+        }
+
+        // レイヤー定義
+        const osmLayer = new ol.layer.Tile({ title: 'OpenStreetMap', type: 'base', visible: true, source: new ol.source.OSM() });
+        const gsiStdLayer = new ol.layer.Tile({ title: 'GSI_Standard', type: 'base', visible: false, source: new ol.source.XYZ({ url: 'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', attributions: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">地理院タイル</a>' }) });
+        const gsiPhotoLayer = new ol.layer.Tile({ title: 'GSI_Photo', type: 'base', visible: false, source: new ol.source.XYZ({ url: 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg', attributions: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">地理院タイル</a>' }) });
+        const baseLayerGroup = new ol.layer.Group({ layers: [osmLayer, gsiStdLayer, gsiPhotoLayer] });
+
+        let points = [];
+
+        const vectorSource = new ol.source.Vector();
+        const lineStyle = new ol.style.Style({ stroke: new ol.style.Stroke({ color: 'rgba(0, 0, 255, 0.7)', width: 4, lineDash: [10, 5] }) });
+        const maxElevStyle = new ol.style.Style({ image: new ol.style.Circle({ radius: 10, fill: new ol.style.Fill({ color: 'orange' }), stroke: new ol.style.Stroke({ color: 'black', width: 3 }) }) });
+        const pointStyle = new ol.style.Style({ image: new ol.style.Circle({ radius: 7, fill: new ol.style.Fill({ color: 'red' }), stroke: new ol.style.Stroke({ color: 'white', width: 2 }) }) });
+        const vectorLayer = new ol.layer.Vector({
+            source: vectorSource,
+            style: function(feature) {
+                if (feature.get('type') === 'max_elevation') return maxElevStyle;
+                if (feature.getGeometry().getType() === 'LineString') return lineStyle;
+                return pointStyle;
+            }
+        });
+
+        // OL要素とDOM要素の関連付け
+        const container = document.getElementById('popup');
+        const content = document.getElementById('popup-content');
+        const closer = document.getElementById('popup-closer');
+        const popupHeader = document.getElementById('popup-header');
+        const overlay = new ol.Overlay({ element: container, autoPan: true, autoPanAnimation: { duration: 250 } });
+        const profileContainer = document.getElementById('profile-popup');
+        const profileCloser = document.getElementById('profile-closer');
+        const profileStatus = document.getElementById('profile-status');
+        const profileHeader = document.getElementById('profile-popup-header');
+
+        // 地図の初期化
+        const map = new ol.Map({
+            target: 'map',
+            layers: [baseLayerGroup, vectorLayer],
+            overlays: [overlay],
+            view: new ol.View({
+                center: ol.proj.fromLonLat([139.75, 35.68]),
+                zoom: 12,
+                maxZoom: 18
+            })
+        });
+
+        let elevationChart = null;
+        let powerChart = null;
+
+        // --- ドラッグ機能 (DOM操作) ---
+        let isDragging = false;
+        let startPoint;
+        let startPosition;
+        let currentDraggingElement = null;
+
+        function startDrag(event, targetElement) {
+            const validHeader = event.target.closest('#popup-header') || event.target.closest('#profile-popup-header');
+            if (!validHeader) return;
+            const isTouchEvent = event.type.includes('touch');
+            if (!isTouchEvent && event.button !== 0) return;
+
+            event.preventDefault();
+            event.stopPropagation();
+
+            const style = window.getComputedStyle(targetElement);
+            if (style.cursor.includes('resize')) return;
+
+            isDragging = true;
+            currentDraggingElement = targetElement;
+            currentDraggingElement.classList.add('top-zindex');
+
+            const eventPoint = isTouchEvent ? [event.touches[0].clientX, event.touches[0].clientY] : [event.clientX, event.clientY];
+            startPoint = eventPoint;
+
+            const rect = targetElement.getBoundingClientRect();
+            targetElement.style.right = 'auto';
+            targetElement.style.left = `${rect.left}px`;
+            startPosition = [rect.left, parseFloat(window.getComputedStyle(targetElement).top)];
+
+            map.getInteractions().forEach(interaction => interaction.setActive(false));
+        }
+
+        function handleDragMove(event) {
+            if (!isDragging || !currentDraggingElement) return;
+            const isTouchEvent = event.type.includes('touch');
+            if (isTouchEvent) event.preventDefault();
+
+            const currentPoint = isTouchEvent ? [event.touches[0].clientX, event.touches[0].clientY] : [event.clientX, event.clientY];
+            const deltaX = currentPoint[0] - startPoint[0];
+            const deltaY = currentPoint[1] - startPoint[1];
+
+            const newLeft = startPosition[0] + deltaX;
+            const newTop = startPosition[1] + deltaY;
+
+            const mapContainer = map.getTargetElement();
+            const mapRect = mapContainer.getBoundingClientRect();
+            const elWidth = currentDraggingElement.offsetWidth;
+            const elHeight = currentDraggingElement.offsetHeight;
+
+            const finalLeft = Math.max(0, Math.min(newLeft, mapRect.width - elWidth));
+            const finalTop = Math.max(0, Math.min(newTop, mapRect.height - elHeight));
+
+            currentDraggingElement.style.left = `${finalLeft}px`;
+            currentDraggingElement.style.top = `${finalTop}px`;
+        }
+
+        function stopDrag() {
+            if (isDragging) {
+                if (currentDraggingElement) {
+                    currentDraggingElement.classList.remove('top-zindex');
+                }
+                isDragging = false;
+                currentDraggingElement = null;
+                map.getInteractions().forEach(interaction => interaction.setActive(true));
+            }
+        }
+        // --- /ドラッグ機能 ---
+
+        // 共通関数
+
+        function resetParameters() {
+            document.getElementById('freq-input').value = INITIAL_PARAMS.freq;
+            document.getElementById('tx-height-input').value = INITIAL_PARAMS.txHeight;
+            document.getElementById('rx-height-input').value = INITIAL_PARAMS.rxHeight;
+            document.getElementById('tx-power-input').value = INITIAL_PARAMS.txPower;
+            document.getElementById('tx-gain-input').value = INITIAL_PARAMS.txGain;
+            document.getElementById('rx-gain-input').value = INITIAL_PARAMS.rxGain;
+            document.getElementById('tx-loss-input').value = INITIAL_PARAMS.txLoss;
+            document.getElementById('rx-loss-input').value = INITIAL_PARAMS.rxLoss;
+        }
+
+        function resetMeasurement() {
+            overlay.setPosition(undefined);
+            vectorSource.clear();
+            points = [];
+            if (elevationChart) { elevationChart.destroy(); elevationChart = null; }
+            if (powerChart) { powerChart.destroy(); powerChart = null; }
+
+            profileStatus.textContent = '2点目を待っています...';
+            content.innerHTML = ''; // 計測結果をクリア
+
+            resetParameters();
+
+            window.lastProfile = null;
+            window.lastDistance = null;
+            window.lastMaxElevation = null;
+        }
+
+        // drawElevationChart
+        function drawElevationChart(profile, distanceMeters) {
+            const ctx = document.getElementById('elevationChart').getContext('2d');
+            const txHeightM = parseFloat(document.getElementById('tx-height-input').value);
+            const rxHeightM = parseFloat(document.getElementById('rx-height-input').value);
+            const freqMHz = parseFloat(document.getElementById('freq-input').value);
+            const txElev = profile[0].elevation + txHeightM;
+            const rxElev = profile[profile.length - 1].elevation + rxHeightM;
+            const effectiveEarthRadiusM = EARTH_RADIUS_M * K_FACTOR;
+            const labels = profile.map(p => (p.distance / 1000).toFixed(2));
+            const elevations = profile.map(p => p.elevation);
+            const losLine = [];
+            const f0_6Lower = [];
+
+            profile.forEach(p => {
+                const d1 = p.distance;
+                const d2 = distanceMeters - d1;
+                const bulge = (d1 * d2) / (2 * effectiveEarthRadiusM);
+                const losAbsHeight = txElev + (rxElev - txElev) * (d1 / distanceMeters);
+
+                losLine.push(losAbsHeight - bulge);
+
+                const f1Radius = 17.32 * Math.sqrt((d1 * d2) / (freqMHz * distanceMeters));
+                f0_6Lower.push(losAbsHeight - bulge - (0.6 * f1Radius));
+            });
+
+            const data = {
+                labels: labels,
+                datasets: [
+                    {
+                        label: '地形標高 (m)',
+                        data: elevations,
+                        borderColor: 'rgba(54, 162, 235, 1)',
+                        backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                        fill: 'start',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        tension: 0.4,
+                        order: 3
+                    },
+                    {
+                        label: '見通し線 (LOS)',
+                        data: losLine,
+                        borderColor: 'rgba(255, 99, 132, 1)',
+                        borderWidth: 3,
+                        pointRadius: 0,
+                        tension: 0,
+                        order: 1
+                    },
+                    {
+                        label: '0.6F1下限',
+                        data: f0_6Lower,
+                        borderColor: 'rgba(75, 192, 192, 1)',
+                        borderWidth: 1,
+                        borderDash: [5, 5],
+                        pointRadius: 0,
+                        tension: 0,
+                        order: 2
+                    }
+                ]
+            };
+
+            if (elevationChart) {
+                elevationChart.data = data;
+                elevationChart.options.scales.x.title.text = `距離 (km) - 全長: ${(distanceMeters / 1000).toFixed(3)} km`;
+                elevationChart.update();
+            } else {
+                elevationChart = new Chart(ctx, {
+                    type: 'line',
+                    data: data,
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        scales: {
+                            x: { title: { display: true, text: `距離 (km) - 全長: ${(distanceMeters / 1000).toFixed(3)} km` } },
+                            y: { title: { display: true, text: '標高 (m)' }, beginAtZero: false }
+                        },
+                        plugins: {
+                            legend: { display: true, position: 'top' },
+                            title: { display: false }
+                        }
+                    }
+                });
+            }
+        }
+
+        // drawPowerChart
+        function drawPowerChart(propResults) {
+            const ctx = document.getElementById('powerChart').getContext('2d');
+            const txPowerW = parseFloat(document.getElementById('tx-power-input').value);
+            const txGainDbi = parseFloat(document.getElementById('tx-gain-input').value);
+            const rxGainDbi = parseFloat(document.getElementById('rx-gain-input').value);
+            const txLossDb = parseFloat(document.getElementById('tx-loss-input').value);
+            const rxLossDb = parseFloat(document.getElementById('rx-loss-input').value);
+
+            if (propResults.error) {
+                if (powerChart) powerChart.destroy(); powerChart = null;
+                return;
+            }
+
+            // 各ステップの電力レベル (dBm) を計算
+            const txPowerDbm = W_TO_DBM(txPowerW);
+            const afterTxLoss = txPowerDbm - txLossDb;
+            const eirpDbm = afterTxLoss + txGainDbi;
+            const afterPropLoss = eirpDbm - propResults.totalLossDb;
+            const afterRxGain = afterPropLoss + rxGainDbi;
+            const rxPowerDbm = afterRxGain - rxLossDb;
+
+            const labels = [
+                '送信機出力',
+                'Txケーブルロス',
+                'Tx空中線利得 (EIRP)',
+                '伝搬損失 (Rxアンテナ入力)',
+                'Rx空中線利得',
+                'Rxケーブルロス',
+                '受信電力'
+            ];
+
+            const dataPoints = [
+                txPowerDbm,       // 1. 送信機出力
+                afterTxLoss,      // 2. Tx側ケーブルロス後
+                eirpDbm,          // 3. Tx側空中線利得 (EIRP)
+                afterPropLoss,    // 4. 伝搬損失後 (Rxアンテナ入力)
+                afterRxGain,      // 5. Rx側空中線利得後
+                rxPowerDbm,       // 6. Rx側ケーブルロス後
+                rxPowerDbm        // 7. 受信電力 (6と同じだが、折れ線グラフの終端として確保)
+            ];
+
+            const data = {
+                labels: labels,
+                datasets: [{
+                    label: '電力レベル (dBm)',
+                    data: dataPoints,
+                    type: 'line',
+                    borderColor: 'rgba(75, 192, 192, 1)',
+                    backgroundColor: 'rgba(75, 192, 192, 0.5)',
+                    borderWidth: 3,
+                    pointRadius: 5,
+                    pointBackgroundColor: 'rgba(75, 192, 192, 1)',
+                    fill: false,
+                    tension: 0
+                }]
+            };
+
+            if (powerChart) {
+                powerChart.data = data;
+                const minVal = Math.min(...dataPoints);
+                const maxVal = Math.max(...dataPoints);
+                powerChart.options.scales.y.min = Math.floor(minVal / 10) * 10 - 10;
+                powerChart.options.scales.y.max = Math.ceil(maxVal / 10) * 10 + 10;
+
+                powerChart.update();
+            } else {
+                powerChart = new Chart(ctx, {
+                    type: 'line',
+                    data: data,
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        scales: {
+                            x: {
+                                title: { display: true, text: '伝搬経路上の要素' },
+                                grid: { display: false }
+                            },
+                            y: {
+                                title: { display: true, text: '電力レベル (dBm)' },
+                                beginAtZero: false
+                            }
+                        },
+                        plugins: {
+                            legend: { display: false },
+                            title: { display: true, text: '伝搬経路 レベルダイヤグラム', font: { size: 14 } },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(context) {
+                                        let label = context.dataset.label || '';
+                                        if (label) { label += ': '; }
+                                        if (context.parsed.y !== null) {
+                                            label += context.parsed.y.toFixed(2) + ' dBm';
+                                        }
+                                        return label;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+            profileStatus.textContent = `${propResults.lossType}計算完了。受信電力: ${rxPowerDbm.toFixed(2)} dBm`;
+        }
+
+        /**
+         * 計測結果の表示（座標、標高、距離、伝搬計算結果）
+         */
+        function displayMeasurementResults(coord1, coord2, dist, elev1, elev2, maxPoint, propResults = null) {
+            const txHeight = parseFloat(document.getElementById('tx-height-input').value);
+            const rxHeight = parseFloat(document.getElementById('rx-height-input').value);
+
+            let propHtml = '<h4>伝搬計算結果 (パラメータ未計算)</h4><p>伝搬計算を実行するには、いずれかの計算ボタンを押してください。</p>';
+            let losClass = '';
+
+            if (propResults && !propResults.error) {
+                if (propResults.lossType === "ITU-R (スタブ値)") {
+                    // ITUモードの表示
+                     propHtml = `
+                        <h4>伝搬計算結果 (${propResults.lossType})</h4>
+                        <p style="color: red;">⚠️ **注意:** この結果は、ITU-R P.1546/P.1812を**ブラウザで厳密に計算できない**ため、FSPLに仮の統計的損失 $+15 \text{ dB}$ を加えた**【スタブ値】**です。</p>
+                        <p><strong>FSPL (dB):</strong> ${propResults.freespaceLossDb.toFixed(2)} dB</p>
+                        <p><strong>総損失 (dB):</strong> ${propResults.totalLossDb.toFixed(2)} dB</p>
+                        <p><strong>受信電力 (dBm):</strong> <strong style="color: ${propResults.rxPowerDbm > -80 ? 'green' : 'red'};">${propResults.rxPowerDbm.toFixed(2)} dBm</strong></p>
+                    `;
+                } else {
+                    // 簡易モデルの表示
+                    losClass = propResults.los ? 'los-yes' : 'los-no';
+                    const losText = propResults.los ? '見通しあり (LOS)' : '見通しなし (NLOS)';
+                    const marginText = isNaN(propResults.minMarginMeters) ? 'N/A' : (propResults.minMarginMeters > 0 ? `${propResults.minMarginMeters.toFixed(1)} m (確保)` : `${Math.abs(propResults.minMarginMeters).toFixed(1)} m (干渉/遮蔽)`);
+                    const rxPowerDbm = (propResults.rxPowerDbm !== null && propResults.rxPowerDbm !== undefined) ? propResults.rxPowerDbm : NaN;
+
+                    propHtml = `
+                        <h4>伝搬計算結果 (${propResults.lossType})</h4>
+                        <p><strong>見通し判定:</strong> <span class="${losClass}">${losText}</span></p>
+                        <p><strong>最小F1マージン:</strong> ${marginText}</p>
+                        <p><strong>回折損失 (Ad):</strong> ${propResults.ad_loss.toFixed(2)} dB</p>
+                        <p><strong>全伝搬損失 (dB):</strong> ${propResults.totalLossDb.toFixed(2)} dB</p>
+                        <p><strong>受信電力 (dBm):</strong> <strong style="color: ${rxPowerDbm > -80 ? 'green' : 'red'};">${rxPowerDbm.toFixed(2)} dBm</strong></p>
+                    `;
+                }
+            }
+
+            const htmlContent = `
+                <h4>計測・座標情報</h4>
+                <p><strong>2点間距離:</strong> <strong style="color: blue;">${(dist / 1000).toFixed(3)} km</strong></p>
+                <p><strong>最高標高:</strong> <strong style="color: orange;">${maxPoint ? maxPoint.elevation.toFixed(1) + ' m' : 'N/A'}</strong></p>
+                <hr>
+
+                <table class="coord-table">
+                    <thead>
+                        <tr>
+                            <th>項目</th>
+                            <th>送信点 (Tx)</th>
+                            <th>受信点 (Rx)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <th>緯度/経度 (WGS84)</th>
+                            <td>${coord1[1].toFixed(5)}, ${coord1[0].toFixed(5)}</td>
+                            <td>${coord2[1].toFixed(5)}, ${coord2[0].toFixed(5)}</td>
+                        </tr>
+                        <tr>
+                            <th>MGRS</th>
+                            <td>${convertToMGRS(coord1, 4)}</td>
+                            <td>${convertToMGRS(coord2, 4)}</td>
+                        </tr>
+                        <tr>
+                            <th>UTM</th>
+                            <td>${convertToUTM(coord1)}</td>
+                            <td>${convertToUTM(coord2)}</td>
+                        </tr>
+                        <tr>
+                            <th>地表面標高 (m)</th>
+                            <td>${elev1 !== null ? elev1.toFixed(1) + ' m' : 'N/A'}</td>
+                            <td>${elev2 !== null ? elev2.toFixed(1) + ' m' : 'N/A'}</td>
+                        </tr>
+                        <tr>
+                            <th>空中線高 (m)</th>
+                            <td>${txHeight.toFixed(1)} m</td>
+                            <td>${rxHeight.toFixed(1)} m</td>
+                        </tr>
+                        <tr>
+                            <th>絶対高 (m)</th>
+                            <td>${elev1 !== null ? (elev1 + txHeight).toFixed(1) + ' m' : 'N/A'}</td>
+                            <td>${elev2 !== null ? (elev2 + rxHeight).toFixed(1) + ' m' : 'N/A'}</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <hr>
+                ${propHtml}
+            `;
+            content.innerHTML = htmlContent;
+        }
+
+        // 標高データ取得ロジック
+        async function getElevation(coordinate) {
+            const cacheKey = coordinate.map(c => c.toFixed(5)).join(',');
+            if (elevationCache.has(cacheKey)) return elevationCache.get(cacheKey);
+
+            const [lon, lat] = coordinate;
+            const url = `${ELEVATION_API_URL}?lon=${lon}&lat=${lat}`;
+
+            try {
+                const response = await fetch(url, { signal: AbortSignal.timeout(API_TIMEOUT_MS) });
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const data = await response.json();
+                const elevation = data.elevation !== null && data.elevation !== undefined ? parseFloat(data.elevation) : null;
+                elevationCache.set(cacheKey, elevation);
+                return elevation;
+            } catch (e) {
+                console.warn(`Failed to fetch elevation for ${cacheKey}: ${e.message}`);
+                elevationCache.set(cacheKey, null);
+                return null;
+            }
+        }
+        function interpolateCoordinates(coordA, coordB, fraction) {
+            const lon = coordA[0] + (coordB[0] - coordA[0]) * fraction;
+            const lat = coordA[1] + (coordB[1] - coordA[1]) * fraction;
+            return [lon, lat];
+        }
+
+        async function getElevationProfile(coord1, coord2, maxSteps = DEFAULT_PROFILE_STEPS) {
+            const distanceMeters = ol.sphere.getDistance(coord1, coord2);
+            const steps = Math.max(10, Math.min(maxSteps, Math.ceil(distanceMeters / 100)));
+            const profile = [];
+            for (let i = 0; i <= steps; i++) {
+                const fraction = i / steps;
+                const coord = interpolateCoordinates(coord1, coord2, fraction);
+                const elevation = await getElevation(coord);
+                profile.push({ coord, webMercatorCoord: ol.proj.fromLonLat(coord), elevation, distance: distanceMeters * fraction });
+            }
+            return profile;
+        }
+        function findMaxElevationPoint(profile) {
+            if (!profile || profile.length === 0) return null;
+            let maxElev = -Infinity;
+            let maxPoint = null;
+            for (const p of profile) {
+                if (p.elevation !== null && p.elevation > maxElev) {
+                    maxElev = p.elevation;
+                    maxPoint = p;
+                }
+            }
+            return maxPoint;
+        }
+        function calculateCenterCoord(coord1, coord2) {
+             return interpolateCoordinates(coord1, coord2, 0.5);
+        }
+        function addPointFeature(webMercatorCoord) {
+            vectorSource.addFeature(new ol.Feature({ geometry: new ol.geom.Point(webMercatorCoord) }));
+        }
+
+        /**
+         * 伝搬損失の計算 (ナイフエッジ回折モデルを導入)
+         */
+        function calculatePropagation(profile, distanceMeters, calculationMode = 'simple') {
+            if (!profile || profile.length < 2) return { los: false, freespaceLoss: NaN, clearance: NaN, rxPowerDbm: NaN, totalLossDb: NaN, error: "プロファイルデータ不足" };
+
+            const freqMHz = parseFloat(document.getElementById('freq-input').value);
+            const txHeightM = parseFloat(document.getElementById('tx-height-input').value);
+            const rxHeightM = parseFloat(document.getElementById('rx-height-input').value);
+            const txPowerW = parseFloat(document.getElementById('tx-power-input').value);
+            const txGainDbi = parseFloat(document.getElementById('tx-gain-input').value);
+            const rxGainDbi = parseFloat(document.getElementById('rx-gain-input').value);
+            const txLossDb = parseFloat(document.getElementById('tx-loss-input').value);
+            const rxLossDb = parseFloat(document.getElementById('rx-loss-input').value);
+
+            if (isNaN(freqMHz) || isNaN(txHeightM) || isNaN(rxHeightM) || isNaN(txPowerW) || isNaN(txGainDbi) || isNaN(rxGainDbi) || isNaN(txLossDb) || isNaN(rxLossDb)) {
+                 return { los: false, freespaceLoss: NaN, clearance: NaN, rxPowerDbm: NaN, totalLossDb: NaN, error: "パラメータが無効です" };
+            }
+
+            const distKm = distanceMeters / 1000;
+            const freespaceLossDb = 20 * Math.log10(distKm) + 20 * Math.log10(freqMHz) + 32.44;
+            const txPowerDbm = W_TO_DBM(txPowerW);
+            const eirpDbm = txPowerDbm - txLossDb + txGainDbi;
+
+            if (calculationMode === 'itu') {
+                // 🚨 ITU-R P.1546/P.1812 のスタブ計算
+                // FSPLに仮の統計的損失 (+15dB) を加算
+                const stubTotalLossDb = freespaceLossDb + 15;
+                const rxPowerDbm = eirpDbm - stubTotalLossDb + rxGainDbi - rxLossDb;
+
+                return {
+                    los: NaN,
+                    ad_loss: 15, // スタブ値
+                    minClearanceRatio: NaN,
+                    minMarginMeters: NaN,
+                    freespaceLossDb: freespaceLossDb,
+                    totalLossDb: stubTotalLossDb,
+                    txPowerDbm: txPowerDbm,
+                    rxPowerDbm: rxPowerDbm,
+                    lossType: "ITU-R (スタブ値)",
+                    error: null
+                };
+            }
+
+            // --- 簡易モデル (Simple Mode) の計算 (回折モデル適用) ---
+            const effectiveEarthRadiusM = EARTH_RADIUS_M * K_FACTOR;
+            const txGroundElev = profile[0].elevation;
+            const rxGroundElev = profile[profile.length - 1].elevation;
+            const txElev = txGroundElev + txHeightM;
+            const rxElev = rxGroundElev + rxHeightM;
+            const wavelength = 300 / freqMHz * 1000000 / 1000000; // 波長 (m) (c/f)
+
+            let totalLossDb = freespaceLossDb;
+            let lossType = "自由空間損失 (FSPL)";
+
+            let minMarginMeters = Infinity; // F1ゾーンクリアランスからのマージン
+            let deepestObstructionPoint = null; // 最も遮蔽が厳しい地点
+            let maxV = -Infinity; //
+
+            // LOS/F1判定と遮蔽地点の特定ループ
+            for (let i = 1; i < profile.length - 1; i++) {
+                const p = profile[i];
+                if (p.elevation === null) continue;
+
+                const d1 = p.distance;
+                const d2 = distanceMeters - d1;
+
+                // 地球膨らみ補正された障害物高さ
+                const bulge = (d1 * d2) / (2 * effectiveEarthRadiusM);
+                const obstacleHeight = p.elevation + bulge;
+
+                // 見通し線の絶対高さ
+                const losHeight = txElev + (rxElev - txElev) * (d1 / distanceMeters);
+
+                // クリアランス H (LOSからの遮蔽量。LOSより下なら負)
+                const clearanceH = losHeight - obstacleHeight;
+
+                // F1ゾーン半径
+                const f1Radius = 17.32 * Math.sqrt((d1 * d2) / (freqMHz * distanceMeters));
+
+                // F1マージン
+                const f1Margin = clearanceH - f1Radius;
+                minMarginMeters = Math.min(minMarginMeters, f1Margin);
+
+                // 回折パラメータ v の計算
+                if (d1 > 0 && d2 > 0 && distanceMeters > 0) {
+                    const v = clearanceH * Math.sqrt(2 / wavelength * (1/d1 + 1/d2));
+
+                    if (deepestObstructionPoint === null || (v < 0 && v < deepestObstructionPoint.v)) {
+                         // vが負で、より小さい（深い遮蔽）地点を特定
+                        deepestObstructionPoint = { v, d1, d2, clearanceH, f1Radius };
+                    }
+                    if (v > 0 && v > maxV) { // LOSで最もクリアランスが大きい地点をトラック (vが正)
+                         maxV = v;
+                    }
+                }
+            }
+
+            let los = (minMarginMeters > 0);
+            let ad_loss = 0; // 回折損失
+
+            if (los) {
+                // 完全にLOSの場合
+                lossType = "自由空間損失 (FSPL)";
+                // F1ゾーンの0.6以下の侵入があれば、軽微な損失を加算 (旧ロジックの名残で、ほぼFSPL)
+                if (minMarginMeters < (1 - 0.6) * deepestObstructionPoint?.f1Radius) {
+                    ad_loss = 3;
+                    lossType = "FSPL + 軽微な回折損失";
+                }
+            } else {
+                // 遮蔽がある場合: 最も厳しい地点でナイフエッジ回折損失を計算
+                if (deepestObstructionPoint) {
+                    const v = deepestObstructionPoint.v;
+
+                    // ITU-R P.526-10 (4) の近似式を参考にした回折損失計算
+                    if (v > -0.78) {
+                        // v > -0.78 のとき: Ad(v) = 6.9 + 20*log10(sqrt((v-0.1)^2+1) + v - 0.1)
+                        ad_loss = 6.9 + 20 * Math.log10(Math.sqrt(Math.pow(v - 0.1, 2) + 1) + v - 0.1);
+                    } else {
+                        // v <= -0.78 のとき: より深い回折
+                        // vが極端に負（深い遮蔽）の場合の近似
+                        ad_loss = 20 * Math.log10(0.225 / Math.abs(v));
+                        // 経験的な最大損失を適用し、過剰な回折損失を防ぐ（例: 50dBを上限）
+                        ad_loss = Math.min(ad_loss, 50);
+                    }
+
+                    totalLossDb += ad_loss;
+                    lossType = `FSPL + 回折損失 (${ad_loss.toFixed(1)} dB) 🚧`;
+
+                } else {
+                    // エラーまたは特殊ケース（距離が短すぎる、データ欠損など）
+                    totalLossDb += 30;
+                    ad_loss = 30;
+                    lossType = "FSPL + 遮蔽損失 (固定フォールバック)";
+                    los = false;
+                }
+            }
+
+            totalLossDb += ad_loss; // FSPL + 回折損失
+
+            const rxPowerDbm = eirpDbm - totalLossDb + rxGainDbi - rxLossDb;
+
+            return {
+                los: los,
+                ad_loss: ad_loss, // 新規追加
+                minClearanceRatio: minMarginMeters / deepestObstructionPoint?.f1Radius || NaN,
+                minMarginMeters: minMarginMeters,
+                freespaceLossDb: freespaceLossDb,
+                totalLossDb: totalLossDb,
+                txPowerDbm: txPowerDbm,
+                rxPowerDbm: rxPowerDbm,
+                lossType: lossType
+            };
+        }
+
+        /**
+         * メインの計測処理（地図クリック時）
+         */
+        async function processMeasurement() {
+            if (!points || points.length < 2) return;
+
+            profileStatus.classList.add('progress');
+            profileStatus.textContent = '標高データを取得中...';
+            const [coord1, coord2] = points;
+
+            const lineFeature = new ol.Feature({ geometry: new ol.geom.LineString([ol.proj.fromLonLat(coord1), ol.proj.fromLonLat(coord2)]) });
+            vectorSource.addFeature(lineFeature);
+
+            const profile = await getElevationProfile(coord1, coord2, DEFAULT_PROFILE_STEPS);
+
+            if (!profile || profile.length < 2) {
+                profileStatus.classList.remove('progress');
+                profileStatus.textContent = 'エラー: 標高プロファイルデータを取得できませんでした。';
+                alert('標高データの取得に失敗しました。時間をおいて再試行してください。');
+                window.lastProfile = null;
+                return;
+            }
+
+            const maxElevationPoint = findMaxElevationPoint(profile);
+            if (maxElevationPoint) {
+                const maxElevFeature = new ol.Feature({ geometry: new ol.geom.Point(maxElevationPoint.webMercatorCoord), type: 'max_elevation' });
+                vectorSource.addFeature(maxElevFeature);
+            }
+
+            const distanceMeters = ol.sphere.getDistance(coord1, coord2);
+
+            // 伝搬計算結果はnullで表示（ボタン押下待ち）
+            displayMeasurementResults(coord1, coord2, distanceMeters, profile[0].elevation, profile[profile.length - 1].elevation, maxElevationPoint, null);
+            drawElevationChart(profile, distanceMeters);
+
+            // レベルダイヤグラムはクリアしておく
+            if (powerChart) { powerChart.destroy(); powerChart = null; }
+
+            const lonLatCenterCoord = calculateCenterCoord(coord1, coord2);
+            const webMercatorCenterCoord = ol.proj.fromLonLat(lonLatCenterCoord);
+            adjustOverlayPosition(overlay, webMercatorCenterCoord);
+
+            profileStatus.classList.remove('progress');
+            profileStatus.textContent = `計測完了。全長: ${(distanceMeters / 1000).toFixed(3)} km。伝搬計算を実行してください。`;
+
+            window.lastProfile = profile;
+            window.lastDistance = distanceMeters;
+            window.lastMaxElevation = maxElevationPoint;
+        }
+
+        /**
+         * 伝搬計算とグラフの更新処理 (統合)
+         */
+        function executeRecalculation(mode) {
+            if (!window.lastProfile || !window.lastDistance) {
+                alert('先に地図上で2点をクリックして計測を実行してください。');
+                return;
+            }
+
+            profileStatus.classList.add('progress');
+            profileStatus.textContent = `${mode === 'simple' ? '簡易モデル' : 'ITU-R'}で伝搬計算を実行中...`;
+
+            const [coord1, coord2] = points;
+
+            const propResults = calculatePropagation(window.lastProfile, window.lastDistance, mode);
+
+            if (propResults.error) {
+                alert(`伝搬計算エラー: ${propResults.error}`);
+                profileStatus.classList.remove('progress');
+                profileStatus.textContent = 'エラーが発生しました。パラメータを確認してください。';
+                return;
+            }
+
+            displayMeasurementResults(
+                coord1,
+                coord2,
+                window.lastDistance,
+                window.lastProfile[0].elevation,
+                window.lastProfile[window.lastProfile.length - 1].elevation,
+                window.lastMaxElevation,
+                propResults
+            );
+
+            // 標高断面図はパラメータが変わっても地形は変わらないので再描画は不要だが、念のため。
+            drawElevationChart(window.lastProfile, window.lastDistance);
+            drawPowerChart(propResults);
+
+            profileStatus.classList.remove('progress');
+            profileStatus.textContent = `${propResults.lossType}計算完了。受信電力: ${propResults.rxPowerDbm.toFixed(2)} dBm`;
+
+            if (mode === 'itu') {
+                 // ITU計算の難しさに関するアラートを出す
+                alert("【ITU-R P.1546/P.1812 計算について】\n\nこれらのモデルは、大規模な地形データや統計的データ、詳細な環境パラメータを必要とします。\n\nブラウザ側のJavaScriptで厳密に計算することは不可能なため、現在表示されている結果は、FSPLに統計的損失を仮定した【スタブ（仮の値）】です。\n\n詳細なITU計算には、専用のサーバー側計算システムが必要です。");
+            }
+        }
+
+
+        // ポップアップ位置調整関数（地図上のオーバーレイ用）
+        function adjustOverlayPosition(overlay, coord) {
+            const pixel = map.getPixelFromCoordinate(coord);
+            const mapSize = map.getSize();
+            const overlayElement = overlay.getElement();
+            const overlayWidth = overlayElement.offsetWidth;
+            const overlayHeight = overlayElement.offsetHeight;
+            pixel[0] = Math.max(overlayWidth / 2, Math.min(pixel[0], mapSize[0] - overlayWidth / 2));
+            pixel[1] = Math.max(overlayHeight, Math.min(pixel[1], mapSize[1] - overlayHeight / 2));
+            const adjustedCoord = map.getCoordinateFromPixel(pixel);
+            overlay.setPosition(adjustedCoord);
+        }
+
+        // 再計算ボタンのイベントリスナー
+        document.getElementById('simple-recalculate-btn').addEventListener('click', () => executeRecalculation('simple'));
+        document.getElementById('itu-calculate-btn').addEventListener('click', () => executeRecalculation('itu'));
+
+        // イベントリスナー (ドラッグ、クリックなど)
+        popupHeader.addEventListener('mousedown', event => startDrag(event, container));
+        profileHeader.addEventListener('mousedown', event => startDrag(event, profileContainer));
+        document.addEventListener('mousemove', handleDragMove);
+        document.addEventListener('mouseup', stopDrag);
+        popupHeader.addEventListener('touchstart', event => startDrag(event, container), { passive: false });
+        profileHeader.addEventListener('touchstart', event => startDrag(event, profileContainer), { passive: false });
+        document.addEventListener('touchmove', handleDragMove, { passive: false });
+        document.addEventListener('touchend', stopDrag);
+        closer.onclick = function() { resetMeasurement(); return false; };
+
+        profileCloser.onclick = function() {
+            profileContainer.style.display = 'none';
+            return false;
+        };
+        // レイヤー切り替えイベント
+        document.addEventListener('change', function(event) {
+            if (event.target.name === 'base_type' || event.target.name === 'tile_source') {
+                const baseType = document.querySelector('input[name="base_type"]:checked').value;
+                const tileSource = document.querySelector('input[name="tile_source"]:checked').value;
+                baseLayerGroup.getLayers().forEach(layer => layer.setVisible(false));
+                if (baseType === 'std') {
+                    if (tileSource === 'osm') osmLayer.setVisible(true);
+                    else if (tileSource === 'gsi') gsiStdLayer.setVisible(true);
+                } else if (baseType === 'photo') gsiPhotoLayer.setVisible(true);
+            }
+        });
+
+        map.on('click', async (evt) => {
+            const webMercatorCoord = evt.coordinate;
+            const lonLatCoord = ol.proj.toLonLat(webMercatorCoord);
+            overlay.setPosition(undefined);
+            if (points.length >= 2) resetMeasurement();
+            addPointFeature(webMercatorCoord);
+            points.push(lonLatCoord);
+
+            profileContainer.style.display = 'flex';
+
+            if (points.length === 2) {
+                await processMeasurement();
+            } else {
+                profileStatus.textContent = '2点目をクリックして計測を完了してください。';
+            }
+        });
+
+        // 初期ロード時に断面図を非表示にしておく
+        window.onload = () => {
+            profileContainer.style.display = 'none';
+        };
+
+    </script>
+</body>
+</html>

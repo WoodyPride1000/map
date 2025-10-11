@@ -86,6 +86,108 @@
 - [国土地理院 地理院タイル](https://maps.gsi.go.jp/development/ichiran.html)
 - ITU-R Recommendation P.526
 
+# 9. 画面キャプチャ・操作図解例
+
+## 9.1 画面全体イメージ
+
+- **図1：メイン画面例**  
+  ![main_map_example.png](./images/main_map_example.png)  
+  - 地図表示領域が画面全体に広がっています。
+  - 左下に「ベースマップ切り替え」コントロール。
+  - 右上に「伝搬計算コントロール」。
+  - 右側に計測結果ポップアップ、左上に断面図ウィンドウ。
+
+## 9.2 ベースマップ切り替え
+
+- **図2：ベースマップ選択例**  
+  ![basemap_switcher.png](./images/basemap_switcher.png)  
+  - 「標準（地図）」「写真（地理院）」の切り替えが可能。
+  - タイルソースとしてOpenStreetMapまたは国土地理院の標準タイルを選択。
+
+## 9.3 伝搬計算コントロール
+
+- **図3：伝搬計算パネル例**  
+  ![propagation_controls.png](./images/propagation_controls.png)  
+  - 周波数、アンテナ高、送信出力などの設定欄。
+  - プリセットボタン（海上通信・都市内LTE・長距離リンク）。
+  - 伝搬計算実行ボタン。
+
+## 9.4 計測結果・断面図ウィンドウ
+
+- **図4：計測結果ウィンドウ例**  
+  ![result_popup.png](./images/result_popup.png)  
+  - 2点指定時の詳細な測定結果（座標、距離、標高、伝搬損失など）が表示。
+- **図5：標高断面図・レベルダイヤグラム**  
+  ![profile_chart.png](./images/profile_chart.png)  
+  - 断面図グラフで地形・LOSライン・フレネルゾーン等を可視化。
+
+## 9.5 操作フロー図
+
+- **図6：基本操作フロー**  
+  ```
+  [地図表示] → [2点クリック] → [パラメータ設定] → [伝搬計算実行] → [結果/断面図表示]
+  ```
+  - 直感的な流れで利用できます。
+
+---
+
+# 10. カスタマイズ手順
+
+## 10.1 ベースマップ・タイル追加
+
+1. `test.thml`の `<script>` 部分で、`ol.layer.Tile` や `ol.source.XYZ` の定義を追加します。
+2. 例えば、新しいタイルソースを追加する場合：
+   ```javascript
+   const customLayer = new ol.layer.Tile({
+       title: 'CustomTile',
+       type: 'base',
+       visible: false,
+       source: new ol.source.XYZ({
+           url: 'https://your.tile.server/tiles/{z}/{x}/{y}.png',
+           attributions: 'Your Tile Attribution'
+       })
+   });
+   baseLayerGroup.getLayers().push(customLayer);
+   ```
+3. コントロールパネルのラジオボタンをHTML側にも追加してください。
+
+## 10.2 パラメータプリセット追加
+
+1. `PRESETS` 定義オブジェクトに新しいシナリオを追加します。
+   ```javascript
+   PRESETS.newScenario = {
+      freq: 1800, txHeight: 20, rxHeight: 5, txPower: 8, txGain: 12, rxGain: 4, txLoss: 3, rxLoss: 2,
+      name: "新規シナリオ"
+   };
+   ```
+2. コントロールパネルのプリセットボタンHTMLを追加。
+   ```html
+   <button class="preset-btn" data-scenario="newScenario">🛰️ 新規シナリオ</button>
+   ```
+
+## 10.3 計算モデルの追加・変更
+
+- 伝搬損失計算ロジック（`calculatePropagation` 関数）を編集することで、独自モデルや追加計算式を組み込めます。
+- 例えば、独自回折モデルや遮蔽補正を導入したい場合は、`lossType` や `ad_loss` の分岐を追加してください。
+
+## 10.4 UIレイアウトの変更
+
+- CSSスタイルを `<style>` 部分で編集することで、ウィンドウの大きさ・色味・フォント等を自由に変更できます。
+- ウィンドウ位置や表示/非表示の条件も JS側で制御可能です。
+
+---
+
+# 11. FAQ・トラブルシューティング画像例
+
+- **図7：API障害時の標高0m表示例**  
+  ![elevation_error.png](./images/elevation_error.png)
+- **図8：ウィンドウドラッグの操作例**  
+  ![window_drag.png](./images/window_drag.png)
+
+---
+
+> 画像ファイルは実際のアプリ画面のキャプチャを取得し、`images`フォルダ等に格納して、WordやPDF編集時に挿入してください。
+
 ---
 
 **本マニュアル内容は2025年10月時点の仕様に基づきます。最新情報はGitHubリポジトリをご確認ください。**

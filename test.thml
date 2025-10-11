@@ -1,11 +1,11 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-    <title>OpenLayers 統合計測・伝搬計算（仰俯角計算追加版）</title>
+    <title>OpenLayers 統合計測・伝搬計算</title>
     <meta charset="UTF-8">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
     <style>
-        /* 必須：地図コンテナのサイズを定義 */
+        /* 地図コンテナのサイズを定義 */
         #map {
             width: 100%;
             height: 100vh; /* 地図を画面全体に表示 */
@@ -43,7 +43,7 @@
         /* --- 1. ベースマップ切り替え (左下) --- */
         #layer-switcher {
             left: 10px;
-            bottom: 10px; 
+            top: 30px; 
             z-index: 1001; 
         }
 
@@ -82,7 +82,7 @@
         #popup {
             right: 290px; 
             top: 10px;
-            width: 330px; /* 幅を少し広げた */
+            width: 330px;
             min-height: 180px;
         }
         #popup-content {
@@ -296,7 +296,7 @@
             }
         };
         const INITIAL_PARAMS = {
-            freq: 300, txHeight: 10, rxHeight: 10, txPower: 10, txGain: 10, rxGain: 10, txLoss: 4, rxLoss: 4
+            freq: 100, txHeight: 10, rxHeight: 10, txPower: 10, txGain: 10, rxGain: 10, txLoss: 4, rxLoss: 4
         };
 
         // K-Factorの値をDOMから取得する関数 (変更なし)

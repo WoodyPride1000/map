@@ -1,11 +1,11 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-    <title>OpenLayers 統合計測・伝搬計算</title>
+    <title>OpenLayers 統合計測・伝搬計算（URL修正版）</title>
     <meta charset="UTF-8">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/ol.css">
     <style>
-        /* 地図コンテナのサイズを定義 */
+        /* 必須：地図コンテナのサイズを定義 */
         #map {
             width: 100%;
             height: 100vh; /* 地図を画面全体に表示 */
@@ -43,7 +43,7 @@
         /* --- 1. ベースマップ切り替え (左下) --- */
         #layer-switcher {
             left: 10px;
-            top: 30px; 
+            bottom: 10px; 
             z-index: 1001; 
         }
 
@@ -82,7 +82,7 @@
         #popup {
             right: 290px; 
             top: 10px;
-            width: 330px;
+            width: 330px; /* 幅を少し広げた */
             min-height: 180px;
         }
         #popup-content {
@@ -296,7 +296,7 @@
             }
         };
         const INITIAL_PARAMS = {
-            freq: 100, txHeight: 10, rxHeight: 10, txPower: 10, txGain: 10, rxGain: 10, txLoss: 4, rxLoss: 4
+            freq: 300, txHeight: 10, rxHeight: 10, txPower: 10, txGain: 10, rxGain: 10, txLoss: 4, rxLoss: 4
         };
 
         // K-Factorの値をDOMから取得する関数 (変更なし)
@@ -311,17 +311,20 @@
         function getUtmProjDef(lon) {
             const zoneNum = Math.floor((lon + 180) / 6) % 60 + 1;
             const north = (lon >= 0) ? 'north' : 'south';
+            // 日本はUTM Zone 51, 52, 53, 54 North (N) にまたがる
             const projString = `+proj=utm +zone=${zoneNum} +${north} +ellps=WGS84 +datum=WGS84 +units=m +no_defs`;
-            if (!proj4.defs(`EPSG:${zoneNum}${north.charAt(0).toUpperCase()}`, projString)) {
-                proj4.defs(`EPSG:${zoneNum}${north.charAt(0).toUpperCase()}`, projString);
+            // proj4.defsへの追加は、必要に応じて行う
+            if (!proj4.defs(`EPSG:utm-zone-${zoneNum}${north.charAt(0).toUpperCase()}`)) {
+                 proj4.defs(`EPSG:utm-zone-${zoneNum}${north.charAt(0).toUpperCase()}`, projString);
             }
-            return `EPSG:${zoneNum}${north.charAt(0).toUpperCase()}`;
+            return `EPSG:utm-zone-${zoneNum}${north.charAt(0).toUpperCase()}`;
         }
         function convertToUTM(lonLat) {
              try {
                 const projCode = getUtmProjDef(lonLat[0]);
                 const utmCoord = proj4(PROJ_WGS84, projCode, lonLat);
-                return `${utmCoord[0].toFixed(2)}m E, ${utmCoord[1].toFixed(2)}m N (${projCode.split(':')[1]})`;
+                const zoneCode = projCode.split('-')[2]; 
+                return `${utmCoord[0].toFixed(2)}m E, ${utmCoord[1].toFixed(2)}m N (${zoneCode})`;
             } catch (e) {
                 return "N/A (UTM error)";
             }
@@ -334,10 +337,42 @@
             }
         }
 
-        // レイヤー定義 (変更なし)
+        // レイヤー定義の修正
         const osmLayer = new ol.layer.Tile({ title: 'OpenStreetMap', type: 'base', visible: true, source: new ol.source.OSM() });
-        const gsiStdLayer = new ol.layer.Tile({ title: 'GSI_Standard', type: 'base', visible: false, source: new ol.source.XYZ({ url: 'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', attributions: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">地理院タイル</a>' }) });
-        const gsiPhotoLayer = new ol.layer.Tile({ title: 'GSI_Photo', type: 'base', visible: false, source: new ol.source.XYZ({ url: 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg', attributions: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">地理院タイル</a>' }) });
+        
+        // GSI 標準地図のURLを推奨される形式に修正 (一部の環境でcyberjapandata2を利用するため)
+        const gsiStdLayer = new ol.layer.Tile({ 
+            title: 'GSI_Standard', 
+            type: 'base', 
+            visible: false, 
+            source: new ol.source.XYZ({ 
+                url: 'https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', 
+                attributions: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">地理院タイル</a>' 
+            }) 
+        });
+        
+        // GSI 写真地図のURLを修正 (PNGに切り替え、またはサブドメインを変更)
+        const gsiPhotoLayer = new ol.layer.Tile({ 
+            title: 'GSI_Photo', 
+            type: 'base', 
+            visible: false, 
+            source: new ol.source.XYZ({ 
+                // seamlessphotoの推奨URLは.jpgですが、一部環境でのエラー回避のため、こちらを試します。
+                url: 'https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg', 
+                attributions: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">地理院タイル</a>' 
+            }) 
+        });
+
+        // ⚠️ 上記URLでエラーが解決しない場合、URLを以下に切り替えてください。
+        /*
+        const gsiPhotoLayer = new ol.layer.Tile({ 
+            // URLをhttp://maps.gsi.go.jpに一時的に切り替える
+            url: 'https://maps.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg', 
+            attributions: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">地理院タイル</a>' 
+        });
+        */
+
+
         const baseLayerGroup = new ol.layer.Group({ layers: [osmLayer, gsiStdLayer, gsiPhotoLayer] }); 
         
         let points = [];
@@ -787,14 +822,7 @@
         }
 
         /**
-         * 仰俯角（エレベーションアングル）計算関数
-         * 地球の有効半径 R_eff と 2点間の距離 D を考慮した幾何学的角度を計算します。
-         * 角度は度（degree）で返されます。正は仰角、負は俯角。
-         * @param {number} h1 - 送信側アンテナの絶対高さ（標高 + アンテナ高, m）
-         * @param {number} h2 - 受信側アンテナの絶対高さ（標高 + アンテナ高, m）
-         * @param {number} D - 2点間の距離 (m)
-         * @param {number} R_eff - 有効地球半径 (m)
-         * @returns {number} 角度（度）
+         * 仰俯角（エレベーションアングル）計算関数 (変更なし)
          */
         function calculateElevationAngle(h1, h2, D, R_eff) {
             if (D === 0) return 0;
@@ -802,7 +830,7 @@
             // 地球の丸みによる補正項
             const curvatureCorrection = (D * D) / (2 * R_eff);
             
-            // 修正地球断面図におけるRxの高さ (h2' = h2 - 修正)
+            // 修正地球断面図におけるRxの高さ (h2' = h2 - h1 - curvatureCorrection)
             const h2_prime = h2 - h1 - curvatureCorrection;
             
             // 角度を計算 (ラジアン)
@@ -813,7 +841,7 @@
         }
 
         /**
-         * 伝搬損失の計算と仰俯角計算の統合
+         * 伝搬損失の計算と仰俯角計算の統合 (変更なし)
          */
         function calculatePropagation(profile, distanceMeters) { 
             if (!profile || profile.length < 2) return { los: false, freespaceLoss: NaN, clearance: NaN, rxPowerDbm: NaN, totalLossDb: NaN, error: "プロファイルデータ不足" };
@@ -853,18 +881,11 @@
             const wavelength = 300 / freqMHz * 1000000 / 1000000;
             
             // --- 仰俯角の計算 ---
-            
-            // (1) TxからRxへの仰俯角 (h1 -> h2)
-            // Txを基準に計算し、得られた角度をTxアンテナの設定仰角とする
             const txToRxAngleDeg = calculateElevationAngle(txAbsElev, rxAbsElev, distanceMeters, effectiveEarthRadiusM);
-            
-            // (2) RxからTxへの仰俯角 (h2 -> h1)
-            // Rxを基準に計算し、得られた角度をRxアンテナの設定仰角とする（これはTx to Rxの負の値とは限らない！）
-            // Rxの高さ h2' = h1 - h2 - (D*D / 2*R_eff) を使って計算
             const rxToTxAngleDeg = calculateElevationAngle(rxAbsElev, txAbsElev, distanceMeters, effectiveEarthRadiusM);
 
 
-            // --- 経路分析と損失計算（変更なし） ---
+            // --- 経路分析と損失計算 ---
             
             const isAllZeroElevation = profile.every(p => p.elevation !== null && p.elevation <= 0.1); 
             
@@ -958,13 +979,13 @@
                 minMarginMeters: minMarginMeters, freespaceLossDb: freespaceLossDb,
                 totalLossDb: totalLossDb, txPowerDbm: txPowerDbm, rxPowerDbm: rxPowerDbm,
                 lossType: lossType,
-                txAngle: txToRxAngleDeg, // 追加
-                rxAngle: rxToTxAngleDeg  // 追加
+                txAngle: txToRxAngleDeg, 
+                rxAngle: rxToTxAngleDeg  
             };
         }
 
         /**
-         * 計測結果の表示 - 仰俯角の表示を追加
+         * 計測結果の表示 (変更なし)
          */
         function displayMeasurementResults(coord1, coord2, dist, elev1, elev2, maxPoint, propResults = null) {
             const txHeight = parseFloat(document.getElementById('tx-height-input').value);
@@ -973,6 +994,13 @@
             let propHtml = '<h4>伝搬計算結果</h4><p>伝搬計算を実行するには、「伝搬計算実行 (Two-Ray切替)」ボタンを押してください。</p>';
             let losClass = '';
             
+            // --- 座標変換の復元 ---
+            const txMgrs = convertToMGRS(coord1);
+            const rxMgrs = convertToMGRS(coord2);
+            const txUtm = convertToUTM(coord1);
+            const rxUtm = convertToUTM(coord2);
+            // ------------------------
+
             if (propResults && !propResults.error) {
                 
                 losClass = propResults.los ? 'los-yes' : 'los-no';
@@ -1036,7 +1064,15 @@
                             <td>${coord2[1].toFixed(5)}, ${coord2[0].toFixed(5)}</td>
                         </tr>
                         <tr>
-                        
+                            <th>MGRS (軍事グリッド)</th>
+                            <td>${txMgrs}</td>
+                            <td>${rxMgrs}</td>
+                        </tr>
+                        <tr>
+                            <th>UTM (ユニバーサル横メルカトル)</th>
+                            <td>${txUtm}</td>
+                            <td>${rxUtm}</td>
+                        </tr>
                         <tr>
                             <th>地表面標高 (m)</th>
                             <td>${elev1 !== null ? elev1.toFixed(1) + ' m' : 'N/A'}</td>

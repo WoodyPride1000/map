@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Basic Pac-Man in One File</title>
+    <style>
+        /* ------------------------------------- */
+        /* CSS: スタイルの定義 */
+        /* ------------------------------------- */
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #111;
+            color: #fff;
+            font-family: sans-serif;
+            flex-direction: column;
+        }
+
+        #game-container {
+            border: 5px solid #000;
+            background-color: #000;
+        }
+
+        #game-status {
+            margin-top: 20px;
+            font-size: 1.2em;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="pacman-canvas" width="400" height="400"></canvas>
+    </div>
+    <div id="game-status">Score: 0</div>
+
+    <script>
+        /* ------------------------------------- */
+        /* JavaScript: ゲームロジックと描画 */
+        /* ------------------------------------- */
+
+        const canvas = document.getElementById("pacman-canvas");
+        const ctx = canvas.getContext("2d");
+        const statusElement = document.getElementById("game-status");
+
+        // ゲームの設定
+        const TILE_SIZE = 20; // 1マスのサイズ (20x20ピクセル)
+        const GRID_SIZE = canvas.width / TILE_SIZE; // 20マス
+        let score = 0;
+
+        // 迷路の定義 (20x20のグリッド)
+        // 1: 壁 (#0000FF)
+        // 2: エサ (ドット)
+        // 9: スタート地点 (空きマスとして扱う)
+        const map = [
+            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 1],
+            [1, 2, 1, 1, 2, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 2, 1, 1, 2, 1],
+            [1, 2, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 2, 1],
+            [1, 2, 1, 2, 1, 1, 2, 1, 1, 9, 9, 1, 1, 2, 1, 1, 2, 1, 2, 1],
+            [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1],
+            [1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1],
+            [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1],
+            [1, 2, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 2, 1],
+            [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+            // ... (マップは実際には20x20で、簡略化しています)
+        ];
+
+        // Pac-Manの初期位置（グリッド座標）
+        let pacman = {
+            x: 9,
+            y: 4,
+            radius: TILE_SIZE / 2 * 0.9,
+            currentDir: { x: 0, y: 0 },
+            nextDir: { x: 0, y: 0 }
+        };
+
+        // ゴーストの初期位置（ここでは単純な敵として1体のみ）
+        let ghost = {
+            x: 10,
+            y: 4,
+            radius: TILE_SIZE / 2 * 0.9,
+            color: 'red'
+        };
+
+        let lastTime = 0;
+        const MOVE_INTERVAL = 200; // ピースが1マス移動する時間 (ミリ秒)
+
+        // -------------------------------------
+        // 描画関数
+        // -------------------------------------
+
+        function drawMap() {
+            for (let y = 0; y < map.length; y++) {
+                for (let x = 0; x < map[y].length; x++) {
+                    const tile = map[y][x];
+                    const px = x * TILE_SIZE;
+                    const py = y * TILE_SIZE;
+
+                    if (tile === 1) { // 壁
+                        ctx.fillStyle = 'blue';
+                        ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
+                    } else if (tile === 2) { // エサ (ドット)
+                        ctx.fillStyle = 'white';
+                        ctx.beginPath();
+                        ctx.arc(px + TILE_SIZE / 2, py + TILE_SIZE / 2, TILE_SIZE / 8, 0, Math.PI * 2);
+                        ctx.fill();
+                    }
+                }
+            }
+        }
+
+        function drawPacman() {
+            const px = pacman.x * TILE_SIZE + TILE_SIZE / 2;
+            const py = pacman.y * TILE_SIZE + TILE_SIZE / 2;
+
+            ctx.fillStyle = 'yellow';
+            ctx.beginPath();
+            // 口の角度を表現する (簡易版)
+            const mouthOpen = 0.2;
+            let startAngle = mouthOpen;
+            let endAngle = Math.PI * 2 - mouthOpen;
+
+            // 描画 (口を少し開ける)
+            ctx.arc(px, py, pacman.radius, startAngle, endAngle);
+            ctx.lineTo(px, py); // 中心に向かって線を引く
+            ctx.fill();
+        }
+
+        function drawGhost() {
+             const px = ghost.x * TILE_SIZE + TILE_SIZE / 2;
+             const py = ghost.y * TILE_SIZE + TILE_SIZE / 2;
+
+             ctx.fillStyle = ghost.color;
+             ctx.fillRect(px - ghost.radius, py - ghost.radius, TILE_SIZE * 0.9, TILE_SIZE * 0.9);
+        }
+
+        // -------------------------------------
+        // ゲームロジック
+        // -------------------------------------
+
+        function checkCollision(nextX, nextY) {
+            // 迷路の境界外に出るか、壁 (1) に当たるかチェック
+            if (nextY < 0 || nextY >= map.length || nextX < 0 || nextX >= map[0].length) {
+                return true; // 衝突
+            }
+            if (map[nextY][nextX] === 1) {
+                return true; // 衝突
+            }
+            return false; // 衝突なし
+        }
+
+        function movePacman() {
+            // 1. 次の方向への移動を試みる
+            let nextX = pacman.x + pacman.nextDir.x;
+            let nextY = pacman.y + pacman.nextDir.y;
+
+            if (!checkCollision(nextX, nextY)) {
+                // 次の方向へ移動可能なら、方向を切り替える
+                pacman.currentDir.x = pacman.nextDir.x;
+                pacman.currentDir.y = pacman.nextDir.y;
+            }
+
+            // 2. 現在の方向へ移動を試みる
+            nextX = pacman.x + pacman.currentDir.x;
+            nextY = pacman.y + pacman.currentDir.y;
+
+            if (!checkCollision(nextX, nextY)) {
+                pacman.x = nextX;
+                pacman.y = nextY;
+
+                // エサを食べる
+                if (map[pacman.y][pacman.x] === 2) {
+                    map[pacman.y][pacman.x] = 0; // 空きマスにする
+                    score += 10;
+                    statusElement.textContent = `Score: ${score}`;
+                }
+            } else {
+                // 移動できない場合は停止
+                pacman.currentDir.x = 0;
+                pacman.currentDir.y = 0;
+            }
+        }
+
+        function moveGhost() {
+            // 非常に単純なランダム移動ロジック
+            const directions = [{x: 1, y: 0}, {x: -1, y: 0}, {x: 0, y: 1}, {x: 0, y: -1}];
+            const currentTile = map[ghost.y][ghost.x];
+
+            let moved = false;
+            let attempts = 0;
+
+            while (!moved && attempts < 10) {
+                const dir = directions[Math.floor(Math.random() * directions.length)];
+                const nextX = ghost.x + dir.x;
+                const nextY = ghost.y + dir.y;
+
+                if (!checkCollision(nextX, nextY)) {
+                    ghost.x = nextX;
+                    ghost.y = nextY;
+                    moved = true;
+                }
+                attempts++;
+            }
+        }
+
+        function checkGameOver() {
+            // パックマンとゴーストが同じマスにいるかチェック
+            if (pacman.x === ghost.x && pacman.y === ghost.y) {
+                alert(`Game Over! Final Score: ${score}`);
+                return true;
+            }
+            return false;
+        }
+
+        /**
+         * メインゲームループ
+         * @param {number} time - requestAnimationFrameが渡す時間
+         */
+        function update(time = 0) {
+            const deltaTime = time - lastTime;
+
+            if (deltaTime > MOVE_INTERVAL) {
+                if (checkGameOver()) return; // ゲームオーバーチェック
+
+                movePacman();
+                moveGhost(); // ゴーストを動かす
+
+                lastTime = time;
+            }
+
+            // 描画
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            drawMap();
+            drawPacman();
+            drawGhost();
+
+            requestAnimationFrame(update);
+        }
+
+        // -------------------------------------
+        // イベントリスナー (キーボード入力)
+        // -------------------------------------
+
+        document.addEventListener('keydown', event => {
+            let dir = { x: 0, y: 0 };
+            switch (event.code) {
+                case 'ArrowLeft':
+                    dir.x = -1;
+                    break;
+                case 'ArrowRight':
+                    dir.x = 1;
+                    break;
+                case 'ArrowUp':
+                    dir.y = -1;
+                    break;
+                case 'ArrowDown':
+                    dir.y = 1;
+                    break;
+                default:
+                    return;
+            }
+            // 次の方向をセットする (移動はゲームループで行う)
+            pacman.nextDir = dir;
+            event.preventDefault(); // スクロールを防ぐ
+        });
+
+        // ゲーム開始
+        update();
+    </script>
+</body>
+</html>

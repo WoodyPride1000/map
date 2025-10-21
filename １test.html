@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>Tetris in One File</title>
+    <style>
+        /* ------------------------------------- */
+        /* CSS: スタイルの定義 */
+        /* ------------------------------------- */
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #333;
+            color: #fff;
+            font-family: sans-serif;
+        }
+
+        #game-container {
+            display: flex;
+            gap: 20px;
+        }
+
+        #tetris-board {
+            border: 5px solid #000;
+            background-color: #111;
+        }
+
+        #info-panel {
+            width: 150px;
+            padding: 10px;
+            background-color: #222;
+            border: 2px solid #000;
+        }
+
+        #score, #game-status {
+            margin-bottom: 10px;
+            font-size: 1.2em;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="tetris-board" width="300" height="600"></canvas>
+
+        <div id="info-panel">
+            <h2>テトリス</h2>
+            <div id="score">Score: 0</div>
+            <div id="game-status">Press Start</div>
+            <p>操作キー:</p>
+            <ul>
+                <li>← / → : 移動</li>
+                <li>↑ : 回転</li>
+                <li>↓ : ソフトドロップ</li>
+                <li>スペースキー : ハードドロップ</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        /* ------------------------------------- */
+        /* JavaScript: ゲームロジックと描画 */
+        /* ------------------------------------- */
+
+        const canvas = document.getElementById('tetris-board');
+        const ctx = canvas.getContext('2d');
+        const scoreElement = document.getElementById('score');
+        const statusElement = document.getElementById('game-status');
+
+        // ゲームの設定値
+        const COLS = 10;
+        const ROWS = 20;
+        const BLOCK_SIZE = canvas.width / COLS; // 30px
+        const COLOR_MAP = [
+            null,       // 0: 空き
+            'cyan',     // 1: I
+            'blue',     // 2: J
+            'orange',   // 3: L
+            'yellow',   // 4: O
+            'green',    // 5: S
+            'purple',   // 6: T
+            'red'       // 7: Z
+        ];
+
+        // テトロミノの形状と色のID (1-7)
+        const SHAPES = [
+            [], // 0番目は未使用
+            [[0, 0, 0, 0], [1, 1, 1, 1], [0, 0, 0, 0], [0, 0, 0, 0]], // I
+            [[2, 0, 0], [2, 2, 2], [0, 0, 0]],                      // J
+            [[0, 0, 3], [3, 3, 3], [0, 0, 0]],                      // L
+            [[4, 4], [4, 4]],                                     // O
+            [[0, 5, 5], [5, 5, 0], [0, 0, 0]],                      // S
+            [[0, 6, 0], [6, 6, 6], [0, 0, 0]],                      // T
+            [[7, 7, 0], [0, 7, 7], [0, 0, 0]]                       // Z
+        ];
+
+        let board;
+        let piece;
+        let score = 0;
+        let gameOver = true;
+        let dropCounter = 0;
+        let dropInterval = 1000; // 1秒
+        let lastTime = 0;
+
+        /**
+         * ゲームボードを初期化（空のグリッドを作成）
+         * @returns {number[][]}
+         */
+        function createBoard() {
+            return Array.from({ length: ROWS }, () => Array(COLS).fill(0));
+        }
+
+        /**
+         * ランダムな新しいテトロミノを生成
+         */
+        function newPiece() {
+            const typeId = Math.floor(Math.random() * (SHAPES.length - 1)) + 1; // 1-7
+            const shape = SHAPES[typeId];
+            const size = shape.length;
+
+            return {
+                matrix: shape,
+                pos: {
+                    x: Math.floor((COLS - size) / 2),
+                    y: 0
+                },
+                colorId: typeId
+            };
+        }
+
+        /**
+         * ピースが現在の位置でボードと衝突するかチェック
+         * @param {number[][]} matrix - ピースの形状
+         * @param {{x: number, y: number}} offset - ピースの位置
+         * @returns {boolean} - 衝突していればtrue
+         */
+        function collide(matrix, offset) {
+            for (let y = 0; y < matrix.length; y++) {
+                for (let x = 0; x < matrix[y].length; x++) {
+                    if (matrix[y][x] !== 0) {
+                        const boardY = y + offset.y;
+                        const boardX = x + offset.x;
+
+                        // 境界チェックまたは既存のブロックとの衝突チェック
+                        if (boardY < 0 || boardY >= ROWS || boardX < 0 || boardX >= COLS || board[boardY][boardX] !== 0) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        /**
+         * ピースをボードに固定（マージ）
+         */
+        function merge() {
+            piece.matrix.forEach((row, y) => {
+                row.forEach((value, x) => {
+                    if (value !== 0) {
+                        board[y + piece.pos.y][x + piece.pos.x] = piece.colorId;
+                    }
+                });
+            });
+            clearLines();
+            piece = newPiece(); // 次のピース
+
+            // 新しいピースがすぐに衝突したらゲームオーバー
+            if (collide(piece.matrix, piece.pos)) {
+                gameOver = true;
+                statusElement.textContent = 'GAME OVER';
+                draw(); // 最終描画
+            }
+        }
+
+        /**
+         * ピースのドロップ処理
+         */
+        function pieceDrop() {
+            piece.pos.y++;
+            if (collide(piece.matrix, piece.pos)) {
+                piece.pos.y--; // 衝突していたら1つ戻す
+                merge(); // ボードに固定
+            }
+        }
+
+        /**
+         * ハードドロップ（一気に底まで落とす）
+         */
+        function hardDrop() {
+            while (!collide(piece.matrix, { x: piece.pos.x, y: piece.pos.y + 1 })) {
+                piece.pos.y++;
+            }
+            merge();
+        }
+
+        /**
+         * ピースの横移動
+         * @param {number} dir - 移動方向 (-1: 左, 1: 右)
+         */
+        function pieceMove(dir) {
+            piece.pos.x += dir;
+            if (collide(piece.matrix, piece.pos)) {
+                piece.pos.x -= dir; // 衝突していたら戻す
+            }
+        }
+
+        /**
+         * ピースの回転
+         */
+        function pieceRotate() {
+            // 行列の転置と反転で時計回りに90度回転
+            const matrix = piece.matrix;
+            const size = matrix.length;
+            const newMatrix = Array.from({ length: size }, (_, i) => Array(size));
+
+            for (let y = 0; y < size; y++) {
+                for (let x = 0; x < size; x++) {
+                    newMatrix[x][size - 1 - y] = matrix[y][x];
+                }
+            }
+
+            // 回転後の衝突チェックと壁蹴り処理 (ここではシンプルな壁蹴りなし)
+            if (!collide(newMatrix, piece.pos)) {
+                piece.matrix = newMatrix;
+            } else {
+                // シンプルな壁蹴り（左右の移動）
+                let offset = 1;
+                while (offset < size) {
+                    piece.pos.x += offset;
+                    if (!collide(newMatrix, piece.pos)) {
+                        piece.matrix = newMatrix;
+                        return;
+                    }
+                    piece.pos.x -= offset * 2;
+                    if (!collide(newMatrix, piece.pos)) {
+                        piece.matrix = newMatrix;
+                        return;
+                    }
+                    piece.pos.x += offset; // 元に戻す
+                    offset++;
+                }
+            }
+        }
+
+        /**
+         * 揃ったラインを消去
+         */
+        function clearLines() {
+            let linesCleared = 0;
+            outer: for (let y = ROWS - 1; y >= 0; y--) {
+                for (let x = 0; x < COLS; x++) {
+                    if (board[y][x] === 0) {
+                        continue outer; // 1つでも空きがあれば次の行へ
+                    }
+                }
+
+                // ラインが揃っている
+                linesCleared++;
+                const row = board.splice(y, 1)[0].fill(0); // 揃った行を削除
+                board.unshift(row); // 上に空の行を追加
+                y++; // 削除したのでインデックスを調整
+            }
+
+            if (linesCleared > 0) {
+                // スコア計算 (テトリス公式ルールではないが、簡単な計算)
+                score += [0, 100, 300, 500, 800][linesCleared] || 0;
+                scoreElement.textContent = `Score: ${score}`;
+            }
+        }
+
+        /**
+         * ブロックの描画
+         * @param {number} x - ボード上のx座標
+         * @param {number} y - ボード上のy座標
+         * @param {number} colorId - ブロックの色ID
+         */
+        function drawBlock(x, y, colorId) {
+            if (colorId === 0) return;
+            ctx.fillStyle = COLOR_MAP[colorId];
+            ctx.fillRect(x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+            ctx.strokeStyle = '#000';
+            ctx.strokeRect(x * BLOCK_SIZE, y * BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+        }
+
+        /**
+         * 全ての描画を更新
+         */
+        function draw() {
+            // 背景クリア
+            ctx.fillStyle = '#111';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // ボード上の固定ブロックを描画
+            board.forEach((row, y) => {
+                row.forEach((value, x) => {
+                    drawBlock(x, y, value);
+                });
+            });
+
+            // 現在のピースを描画
+            piece.matrix.forEach((row, y) => {
+                row.forEach((value, x) => {
+                    if (value !== 0) {
+                        drawBlock(piece.pos.x + x, piece.pos.y + y, piece.colorId);
+                    }
+                });
+            });
+        }
+
+        /**
+         * メインゲームループ
+         * @param {number} time - requestAnimationFrameが渡す時間
+         */
+        function update(time = 0) {
+            if (gameOver) return;
+
+            const deltaTime = time - lastTime;
+            lastTime = time;
+
+            dropCounter += deltaTime;
+            if (dropCounter > dropInterval) {
+                pieceDrop();
+                dropCounter = 0;
+            }
+
+            draw();
+            requestAnimationFrame(update);
+        }
+
+        /**
+         * キーボード入力処理
+         * @param {KeyboardEvent} event
+         */
+        document.addEventListener('keydown', event => {
+            if (gameOver) {
+                if (event.code === 'Enter' || event.code === 'Space') {
+                    startGame();
+                }
+                return;
+            }
+
+            switch (event.code) {
+                case 'ArrowLeft':
+                    pieceMove(-1);
+                    break;
+                case 'ArrowRight':
+                    pieceMove(1);
+                    break;
+                case 'ArrowDown':
+                    pieceDrop();
+                    // ソフトドロップ後、インターバルをリセットすることで急な落下を防ぐ
+                    dropCounter = 0;
+                    break;
+                case 'ArrowUp':
+                    pieceRotate();
+                    break;
+                case 'Space':
+                    hardDrop();
+                    break;
+            }
+            draw();
+        });
+
+        /**
+         * ゲーム開始処理
+         */
+        function startGame() {
+            board = createBoard();
+            piece = newPiece();
+            score = 0;
+            scoreElement.textContent = 'Score: 0';
+            statusElement.textContent = 'Playing...';
+            gameOver = false;
+            dropCounter = 0;
+            lastTime = 0;
+            update(); // ゲームループ開始
+        }
+
+        // 初期表示
+        statusElement.textContent = 'Press Enter or Space to Start';
+
+    </script>
+</body>
+</html>
